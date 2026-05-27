@@ -1,0 +1,14 @@
+# Stage 3 — LOPO fine-tuning (10 × held-out protocol)
+
+main_ckpt:    checkpoints/main/best.ckpt   # set to Stage-2 best checkpoint
+tier1_dir:    data/tier1_grammar
+tier2_dir:    data/tier2_scapy
+ckpt_dir:     checkpoints/lopo
+
+max_steps:    2000
+n_msgs:       32
+max_len:      512
+lr:           1.0e-4
+num_workers:  0
+fast_dev:     false
+protocol:     null   # set to a single protocol name for a focused run

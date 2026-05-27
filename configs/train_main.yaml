@@ -1,0 +1,13 @@
+# Stage 2 — Joint main training (FieldTypeHead + BoundaryHead)
+
+lm_ckpt_path: null          # set to checkpoints/lm/bylm-*.ckpt after Stage 1
+tier1_dir:    data/tier1_grammar
+tier2_dir:    data/tier2_scapy
+ckpt_dir:     checkpoints
+
+epochs:       50
+n_msgs:       64
+max_len:      512
+lr:           3.0e-4
+num_workers:  0
+fast_dev:     false
