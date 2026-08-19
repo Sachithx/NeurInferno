@@ -29,7 +29,7 @@ FIELD_TYPE_IDS: dict[str, int] = {v: k for k, v in FIELD_TYPES.items()}
 #
 # Merges fine classes with similar protocol-agnostic byte-level signatures.
 # UNKNOWN (0) is the ignore-index — kept but never predicted.
-# RESERVED → FLAGS (per brief): reserved bits share the static/zero-valued
+# RESERVED → FLAGS: reserved bits share the static/zero-valued
 #   statistical signature of flags fields, unlike OPAQUE blobs.
 # DHCP note: GT labels whole option-value blobs as OPAQUE even when the model
 #   sees internal TLV structure (type + length + data sub-fields). This is a

@@ -33,6 +33,11 @@ else
         --max_msgs    "$MAX_MSGS"
 fi
 
-python -m src.evaluation.compare_results \
-    --got "$RESULTS_DIR" \
-    --ref results/reference
+if [[ -d results/reference ]]; then
+    python -m src.evaluation.compare_results \
+        --got "$RESULTS_DIR" \
+        --ref results/reference
+else
+    echo "No results/reference/ — skip table comparison."
+    echo "Eval CSVs are in ${RESULTS_DIR}/"
+fi

@@ -19,13 +19,11 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-A CUDA GPU is required for training.
+Python 3.10+ and a CUDA GPU are required.
 
 ## Checkpoints
 
-Weights are not in git (~400 MB). They are in a shared Drive folder
-([link](https://drive.google.com/drive/folders/1AR5maHr_DzH8yXj1jcKAJ-8z8lYk38nD?usp=sharing);
-set sharing to **anyone with the link**):
+Weights are not in git (~400 MB). Download them, then evaluate:
 
 ```bash
 bash download_checkpoints.sh
@@ -33,7 +31,7 @@ CUDA_VISIBLE_DEVICES=0 bash eval.sh
 ```
 
 If `checkpoints/seed789/` is already on disk, skip the download and run
-`bash eval.sh` only.
+`bash eval.sh` only. Eval writes CSVs under `results/seed789/`.
 
 ## Run
 

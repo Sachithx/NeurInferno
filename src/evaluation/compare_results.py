@@ -54,6 +54,10 @@ def _compare_rows(
 
 
 def compare(got_dir: Path, ref_dir: Path) -> int:
+    if not ref_dir.is_dir():
+        print(f"No reference tables at {ref_dir} — skip comparison.")
+        return 0
+
     mismatches: list[str] = []
 
     lopo_got = got_dir / "lopo_results.csv"

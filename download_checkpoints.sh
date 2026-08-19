@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download seed-789 eval weights from the shared Drive folder into
-# checkpoints/seed789/.  Sharing must be "anyone with the link".
+# checkpoints/seed789/.
 
 set -euo pipefail
 cd "$(dirname "$0")"
