@@ -220,7 +220,6 @@ __marimo__/
 bi_eval_results
 checkpoints
 
-ignore
 netzob_eval_results
 results
 
