@@ -1,0 +1,1 @@
+{"type": "format_star", "segments": [{"kind": "qlv", "q_width": 1, "l_width": 2}, {"kind": "tlv", "t_width": 1, "l_width": 4}, {"kind": "fixed", "width": 2, "personality": "float"}, {"kind": "qvbytes", "q_width": 4, "v_count": 6}, {"kind": "qlv", "q_width": 2, "l_width": 3}, {"kind": "star_tlv", "t_width": 2, "l_width": 4, "suffix": 3}]}

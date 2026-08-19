@@ -1,0 +1,1 @@
+{"type": "format_star", "segments": [{"kind": "fixed", "width": 2, "personality": "float"}, {"kind": "star_lv", "l_width": 1, "suffix": 3}]}

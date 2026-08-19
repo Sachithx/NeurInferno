@@ -1,0 +1,1 @@
+{"type": "format_star", "segments": [{"kind": "tlv", "t_width": 4, "l_width": 1}, {"kind": "star_tlv", "t_width": 2, "l_width": 1, "suffix": 4}]}

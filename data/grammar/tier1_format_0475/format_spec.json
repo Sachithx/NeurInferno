@@ -1,0 +1,1 @@
+{"type": "format_star", "segments": [{"kind": "fixed", "width": 2, "personality": "address"}, {"kind": "star_tlv", "t_width": 1, "l_width": 3, "suffix": 0}]}

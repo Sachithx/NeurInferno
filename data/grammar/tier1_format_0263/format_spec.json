@@ -1,0 +1,1 @@
+{"type": "format", "segments": [{"kind": "lv", "l_width": 1}, {"kind": "lv", "l_width": 2}, {"kind": "qvbytes", "q_width": 1, "v_count": 8}, {"kind": "fixed", "width": 2, "personality": "ascii"}]}
