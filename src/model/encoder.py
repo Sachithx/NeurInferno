@@ -32,14 +32,16 @@ class CrossMsgTransformerLayer(nn.Module):
 
     Sub-block order (pre-LayerNorm throughout for training stability):
       1. LN → self-attention  → residual
-      2. LN → cross-msg stats projection → residual
+      2. LN → cross-msg stats projection → residual   (skipped if disable_cross_msg)
       3. LN → FFN              → residual
     """
 
     def __init__(self, d_model: int = 128, n_heads: int = 4,
-                 d_ff: int = 512, dropout: float = 0.1) -> None:
+                 d_ff: int = 512, dropout: float = 0.1,
+                 disable_cross_msg: bool = False) -> None:
         super().__init__()
         self.d_model = d_model
+        self.disable_cross_msg = disable_cross_msg
 
         # — Self-attention —
         self.norm1    = nn.LayerNorm(d_model)
@@ -88,18 +90,24 @@ class CrossMsgTransformerLayer(nn.Module):
         # ── 2. Cross-message statistics injection ─────────────────────────
         h_norm = self.norm2(h)
 
-        # Zero out padding positions before aggregating across messages
-        if padding_mask is not None:
-            pad_mask_4d = padding_mask.unsqueeze(-1).float()  # (B, N, L, 1)
-            h_agg = h_norm * (1.0 - pad_mask_4d)             # zero padding
+        if self.disable_cross_msg:
+            # Ablation: skip cross-msg stats; pass zeros for mean/max/var slots
+            zeros = torch.zeros_like(h_norm)
+            combined = torch.cat([h_norm, zeros, zeros, zeros], dim=-1)
+            var_m = zeros
         else:
-            h_agg = h_norm
+            # Zero out padding positions before aggregating across messages
+            if padding_mask is not None:
+                pad_mask_4d = padding_mask.unsqueeze(-1).float()  # (B, N, L, 1)
+                h_agg = h_norm * (1.0 - pad_mask_4d)             # zero padding
+            else:
+                h_agg = h_norm
 
-        mean_m = h_agg.mean(dim=1, keepdim=True).expand_as(h_norm)
-        max_m  = h_agg.max(dim=1,  keepdim=True).values.expand_as(h_norm)
-        var_m  = h_agg.var(dim=1,  unbiased=False, keepdim=True).expand_as(h_norm)
+            mean_m = h_agg.mean(dim=1, keepdim=True).expand_as(h_norm)
+            max_m  = h_agg.max(dim=1,  keepdim=True).values.expand_as(h_norm)
+            var_m  = h_agg.var(dim=1,  unbiased=False, keepdim=True).expand_as(h_norm)
+            combined = torch.cat([h_norm, mean_m, max_m, var_m], dim=-1)  # (B,N,L,4D)
 
-        combined = torch.cat([h_norm, mean_m, max_m, var_m], dim=-1)  # (B,N,L,4D)
         h = h + self.drop2(self.cross_msg_proj(combined))
 
         # ── 3. FFN ────────────────────────────────────────────────────────
@@ -124,16 +132,18 @@ class ByteEncoder(nn.Module):
 
     def __init__(
         self,
-        d_model:  int   = 128,
-        n_heads:  int   = 4,
-        d_ff:     int   = 512,
-        n_layers: int   = 4,
-        max_len:  int   = 512,
-        dropout:  float = 0.1,
+        d_model:           int   = 128,
+        n_heads:           int   = 4,
+        d_ff:              int   = 512,
+        n_layers:          int   = 4,
+        max_len:           int   = 512,
+        dropout:           float = 0.1,
+        disable_cross_msg: bool  = False,
     ) -> None:
         super().__init__()
         self.d_model = d_model
         self.max_len = max_len
+        self.disable_cross_msg = disable_cross_msg
 
         # Byte + special-token embedding
         self.embedding = nn.Embedding(VOCAB, d_model, padding_idx=PAD_IDX)
@@ -145,7 +155,8 @@ class ByteEncoder(nn.Module):
 
         # Transformer layers with cross-message injection
         self.layers = nn.ModuleList([
-            CrossMsgTransformerLayer(d_model, n_heads, d_ff, dropout)
+            CrossMsgTransformerLayer(d_model, n_heads, d_ff, dropout,
+                                     disable_cross_msg=disable_cross_msg)
             for _ in range(n_layers)
         ])
 

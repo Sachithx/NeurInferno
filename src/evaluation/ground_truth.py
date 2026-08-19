@@ -1,9 +1,8 @@
 """
-Ground-truth loading for LOPO evaluation.
+Ground-truth loading for LOPO / L4PO evaluation.
 
-We use Tier-2 Scapy-extracted messages as the test set because they carry
-per-byte and per-gap labels.  The BI benchmark `.txt.input` files have no
-explicit labels, so we do NOT use them for metric computation.  See NOTES.md.
+Test messages are the last 20% of each protocol's messages.jsonl, matching
+the split used during training.  Corrupted messages are dropped.
 """
 
 from __future__ import annotations

@@ -224,3 +224,5 @@ ignore
 netzob_eval_results
 results
 
+.DS_Store
+neurinferno_seed789_ckpts.tar.gz

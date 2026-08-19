@@ -1,12 +1,13 @@
 """
-Boundary-inference metrics matching BinaryInferno paper Section IX-A (eqs 4-6).
+Boundary-inference metrics.
 
 TP = inferred boundary coincides with a ground-truth boundary
 FP = inferred boundary with no matching ground truth
 FN = ground-truth boundary not inferred
 Negatives = non-boundary gaps (for FPR denominator)
 
-Metrics are computed per-message and then macro-averaged across messages.
+Per-message TP/FP/FN/TN are summed, then precision/recall/FPR/F1 are computed
+on the totals (micro over gaps, one score per protocol).
 """
 
 from __future__ import annotations

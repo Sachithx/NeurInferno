@@ -25,6 +25,56 @@ FIELD_TYPES: dict[int, str] = {
 FIELD_TYPE_IDS: dict[str, int] = {v: k for k, v in FIELD_TYPES.items()}
 
 
+# ── Coarse 8-class taxonomy for cross-protocol transfer ──────────────────────
+#
+# Merges fine classes with similar protocol-agnostic byte-level signatures.
+# UNKNOWN (0) is the ignore-index — kept but never predicted.
+# RESERVED → FLAGS (per brief): reserved bits share the static/zero-valued
+#   statistical signature of flags fields, unlike OPAQUE blobs.
+# DHCP note: GT labels whole option-value blobs as OPAQUE even when the model
+#   sees internal TLV structure (type + length + data sub-fields). This is a
+#   GT-convention mismatch, not a model error. Expect DHCP OPAQUE F1 ≈ 0
+#   in fine-grained 17-class eval; the coarse merge absorbs most of the hit.
+
+COARSE_TYPES: dict[int, str] = {
+    0: "UNKNOWN",    # ignore-index, excluded from all metrics
+    1: "LENGTH",
+    2: "TYPE_TAG",
+    3: "ADDRESS",
+    4: "PORT",
+    5: "FLAGS",
+    6: "CHECKSUM",
+    7: "NUMERIC",
+    8: "OPAQUE",
+}
+COARSE_TYPE_IDS: dict[str, int] = {v: k for k, v in COARSE_TYPES.items()}
+N_COARSE_TYPES  = len(COARSE_TYPES)         # 9 including UNKNOWN
+N_COARSE_PRED   = N_COARSE_TYPES - 1        # 8 predicted classes (excl. UNKNOWN)
+COARSE_LABELS   = [COARSE_TYPES[i] for i in range(1, N_COARSE_TYPES)]  # ordered
+
+# Fine-to-coarse mapping tensor index: FINE_TO_COARSE[fine_id] = coarse_id
+# Build as a plain dict first; a torch LongTensor version is built lazily by consumers.
+FINE_TO_COARSE: dict[int, int] = {
+    0:  0,  # UNKNOWN     → UNKNOWN     (ignore-index)
+    1:  COARSE_TYPE_IDS["LENGTH"],
+    2:  COARSE_TYPE_IDS["TYPE_TAG"],
+    3:  COARSE_TYPE_IDS["NUMERIC"],   # QUANTITY
+    4:  COARSE_TYPE_IDS["NUMERIC"],   # TIMESTAMP  (singleton in NTP/ICMP)
+    5:  COARSE_TYPE_IDS["ADDRESS"],
+    6:  COARSE_TYPE_IDS["PORT"],
+    7:  COARSE_TYPE_IDS["FLAGS"],
+    8:  COARSE_TYPE_IDS["CHECKSUM"],
+    9:  COARSE_TYPE_IDS["NUMERIC"],   # COUNTER
+    10: COARSE_TYPE_IDS["OPAQUE"],    # ASCII      (singleton in DHCP)
+    11: COARSE_TYPE_IDS["FLAGS"],     # ENUM
+    12: COARSE_TYPE_IDS["NUMERIC"],   # FLOAT      (singleton in NTP)
+    13: COARSE_TYPE_IDS["NUMERIC"],   # INTEGER    (catch-all)
+    14: COARSE_TYPE_IDS["OPAQUE"],    # OPAQUE
+    15: COARSE_TYPE_IDS["OPAQUE"],    # PADDING
+    16: COARSE_TYPE_IDS["FLAGS"],     # RESERVED   (static zeros → FLAGS-like)
+}
+
+
 def validate_message(msg: dict) -> None:
     """Assert structural invariants on a ground-truth message dict."""
     assert "bytes_hex" in msg, "missing bytes_hex"

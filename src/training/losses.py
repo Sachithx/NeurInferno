@@ -69,18 +69,26 @@ def boundary_loss(
 
 
 def type_loss(
-    logits:   torch.Tensor,  # (B, N, L, 17)
-    targets:  torch.Tensor,  # (B, N, L) long
-    byte_mask: torch.Tensor, # (B, N, L) bool — True where real (not PAD)
+    logits:    torch.Tensor,  # (B, N, L, 17)
+    targets:   torch.Tensor,  # (B, N, L) long
+    byte_mask: torch.Tensor,  # (B, N, L) bool — True where real (not PAD)
+    use_focal: bool  = False,
+    gamma:     float = 2.0,
 ) -> torch.Tensor:
-    """Cross-entropy over real bytes; ignore UNKNOWN (index 0) labels."""
-    # Build mask: real byte AND not UNKNOWN
+    """Cross-entropy (or focal CE) over real bytes; ignore UNKNOWN (index 0)."""
     valid = byte_mask & (targets != _UNK)
     if valid.sum() == 0:
         return logits.sum() * 0.0
 
     logits_flat  = logits[valid]    # (M, 17)
     targets_flat = targets[valid]   # (M,)
+
+    if use_focal:
+        log_p = F.log_softmax(logits_flat, dim=-1)
+        nll   = F.nll_loss(log_p, targets_flat, reduction='none')  # (M,)
+        p_t   = torch.exp(-nll)
+        return ((1.0 - p_t) ** gamma * nll).mean()
+
     return F.cross_entropy(logits_flat, targets_flat)
 
 
@@ -106,8 +114,8 @@ def consistency_loss(
 @dataclass
 class LossWeights:
     boundary:    float = 1.0
-    type_:       float = 0.5
-    consistency: float = 0.2
+    type_:       float = 0.0
+    consistency: float = 0.0
 
 
 @dataclass
@@ -127,25 +135,31 @@ class LossBreakdown:
 
 
 def compute_total_loss(
-    boundary_logits: torch.Tensor,  # (B, N, L-1, 1)
-    field_logits:    torch.Tensor,  # (B, N, L, 17)
-    bg_labels:       torch.Tensor,  # (B, N, L-1)
-    ft_labels:       torch.Tensor,  # (B, N, L)
-    pad_mask:        torch.Tensor,  # (B, N, L)  True=PAD
-    weights:         LossWeights | None = None,
-    use_focal:       bool = True,
+    boundary_logits:     torch.Tensor,  # (B, N, L-1, 1)
+    field_logits:        torch.Tensor,  # (B, N, L, 17)
+    bg_labels:           torch.Tensor,  # (B, N, L-1)
+    ft_labels:           torch.Tensor,  # (B, N, L)
+    pad_mask:            torch.Tensor,  # (B, N, L)  True=PAD
+    weights:             LossWeights | None = None,
+    use_focal:           bool = True,   # focal BCE for boundary loss
+    use_focal_type:      bool = False,  # focal CE  for field-type loss
+    use_consistency_loss: bool = True,
 ) -> LossBreakdown:
     """Compute and return all loss components."""
     if weights is None:
         weights = LossWeights()
 
-    byte_mask = ~pad_mask                          # True where real byte
-    gap_mask  = byte_mask[..., :-1] & byte_mask[..., 1:]  # True where real gap
+    byte_mask = ~pad_mask
+    gap_mask  = byte_mask[..., :-1] & byte_mask[..., 1:]
 
     l_bd = boundary_loss(boundary_logits, bg_labels, gap_mask, use_focal=use_focal)
-    l_ty = type_loss(field_logits, ft_labels, byte_mask)
-    l_co = consistency_loss(
-        boundary_logits.squeeze(-1).sigmoid(), ft_labels, gap_mask)
+    l_ty = type_loss(field_logits, ft_labels, byte_mask, use_focal=use_focal_type)
+
+    if use_consistency_loss:
+        l_co = consistency_loss(
+            boundary_logits.squeeze(-1).sigmoid(), ft_labels, gap_mask)
+    else:
+        l_co = boundary_logits.sum() * 0.0  # zero, keeps graph alive
 
     l_total = (weights.boundary    * l_bd
              + weights.type_       * l_ty

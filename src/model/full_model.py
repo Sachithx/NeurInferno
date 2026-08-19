@@ -9,18 +9,25 @@ Returns a ModelOutput dataclass with:
     field_logits     : (B, N, L,   17) — per-byte field-type logits
     entropy          : (B, N, L)       — ByteLM conditional entropy (for viz)
     padding_mask     : (B, N, L)       — True where x == PAD_IDX
+
+Ablation flags (passed to constructor):
+    disable_cross_msg        : skip cross-message statistics injection in encoder
+    disable_entropy          : zero out entropy feature in BoundaryHead
+    use_bio_head             : replace BoundaryHead with BIOTaggingHead
+    use_relational_type_head : use RelationalFieldTypeHead (h+entropy+cross_var+BiGRU)
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn as nn
 
 from src.model.encoder import ByteEncoder, PAD_IDX
 from src.model.byte_lm import ByteLM
-from src.model.heads import FieldTypeHead, BoundaryHead
+from src.model.heads import (FieldTypeHead, RelationalFieldTypeHead,
+                             BoundaryHead, BIOTaggingHead)
 
 
 @dataclass
@@ -37,34 +44,60 @@ class FullModel(nn.Module):
 
     Parameters
     ----------
-    d_model   : encoder hidden dimension (default 128)
-    n_heads   : attention heads (default 4)
-    d_ff      : FFN width (default 512)
-    n_layers  : encoder transformer layers (default 4)
-    max_len   : max byte-sequence length (default 512)
-    lm_frozen : if True, freeze ByteLM weights during training
+    d_model            : encoder hidden dimension (default 128)
+    n_heads            : attention heads (default 4)
+    d_ff               : FFN width (default 512)
+    n_layers           : encoder transformer layers (default 4)
+    max_len            : max byte-sequence length (default 512)
+    lm_frozen          : if True, freeze ByteLM weights during training
+    disable_cross_msg  : ablation — skip cross-message statistics injection
+    disable_entropy    : ablation — zero out entropy in boundary features
+    use_bio_head       : ablation — use BIO tagger instead of pairwise boundary head
     """
 
     def __init__(
         self,
-        d_model:   int   = 128,
-        n_heads:   int   = 4,
-        d_ff:      int   = 512,
-        n_layers:  int   = 4,
-        max_len:   int   = 512,
-        dropout:   float = 0.1,
-        lm_frozen: bool  = True,
+        d_model:           int   = 128,
+        n_heads:           int   = 4,
+        d_ff:              int   = 512,
+        n_layers:          int   = 4,
+        max_len:           int   = 512,
+        dropout:           float = 0.1,
+        lm_frozen:                bool  = True,
+        disable_cross_msg:        bool  = False,
+        disable_entropy:          bool  = False,
+        use_bio_head:             bool  = False,
+        use_relational_type_head: bool  = False,
+        lm_d_model:               int   = 64,
+        lm_n_heads:        int   = 4,
+        lm_d_ff:           int   = 256,
+        lm_n_layers:       int   = 2,
     ) -> None:
         super().__init__()
+
+        self.use_bio_head             = use_bio_head
+        self.use_relational_type_head = use_relational_type_head
 
         self.encoder = ByteEncoder(
             d_model=d_model, n_heads=n_heads, d_ff=d_ff,
             n_layers=n_layers, max_len=max_len, dropout=dropout,
+            disable_cross_msg=disable_cross_msg,
         )
-        self.byte_lm = ByteLM(max_len=max_len, dropout=dropout)
+        self.byte_lm = ByteLM(
+            d_model=lm_d_model, n_heads=lm_n_heads,
+            d_ff=lm_d_ff, n_layers=lm_n_layers,
+            max_len=max_len, dropout=dropout,
+        )
 
-        self.field_type_head = FieldTypeHead(d_model=d_model)
-        self.boundary_head   = BoundaryHead(d_model=d_model)
+        if use_relational_type_head:
+            self.field_type_head = RelationalFieldTypeHead(d_model=d_model)
+        else:
+            self.field_type_head = FieldTypeHead(d_model=d_model)
+        if use_bio_head:
+            self.boundary_head = BIOTaggingHead(d_model=d_model)
+        else:
+            self.boundary_head = BoundaryHead(d_model=d_model,
+                                              disable_entropy=disable_entropy)
 
         if lm_frozen:
             self._freeze_lm()
@@ -99,8 +132,15 @@ class FullModel(nn.Module):
         entropy = self.byte_lm.compute_entropy_batched(x)  # (B, N, L)
 
         # — Prediction heads —
-        field_logits = self.field_type_head(h)                           # (B,N,L,17)
-        boundary_logits = self.boundary_head(h, entropy, cross_var)      # (B,N,L-1,1)
+        if self.use_relational_type_head:
+            field_logits = self.field_type_head(h, entropy, cross_var, padding_mask)
+        else:
+            field_logits = self.field_type_head(h)                       # (B,N,L,17)
+        if self.use_bio_head:
+            bio_logits      = self.boundary_head(h)                      # (B,N,L,2)
+            boundary_logits = BIOTaggingHead.bio_to_boundary_logits(bio_logits)  # (B,N,L-1,1)
+        else:
+            boundary_logits = self.boundary_head(h, entropy, cross_var)  # (B,N,L-1,1)
 
         return ModelOutput(
             boundary_logits=boundary_logits,
@@ -110,6 +150,25 @@ class FullModel(nn.Module):
         )
 
     # ── Inference helpers ────────────────────────────────────────────────────
+
+    def encode(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Run encoder + ByteLM without prediction heads.
+
+        Returns
+        -------
+        h            : (B, N, L, D)   — frozen encoder output
+        entropy      : (B, N, L)      — ByteLM conditional entropy
+        cross_var    : (B, N, L, D)   — cross-message variance
+        padding_mask : (B, N, L) bool — True where PAD
+        """
+        B, N, L = x.shape
+        padding_mask = (x == PAD_IDX)
+        h, cross_var = self.encoder(x, padding_mask)
+        entropy = self.byte_lm.compute_entropy_batched(x)
+        return h, entropy, cross_var, padding_mask
 
     @torch.no_grad()
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

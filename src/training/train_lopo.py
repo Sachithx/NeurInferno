@@ -1,38 +1,21 @@
 """
 Stage 3 — LOPO (Leave-One-Protocol-Out) fine-tuning.
 
-Two modes:
+Leakage-free (pass --lm_ckpt): for each held-out protocol P, a fresh Stage-2
+main model is trained on {grammar + protocols \\ {P}} before fine-tuning.
+Validation during fine-tuning uses grammar val groups only, so P is unknown
+at every stage.
 
-  Leakage-free (recommended) — pass --lm_ckpt
-    For each held-out protocol P, a fresh Stage-2 main model is trained on
-    {Tier1 + Tier2 \\ {P}} before fine-tuning starts.  Validation during
-    fine-tuning also never touches P — only Tier-1 val groups are used.
-    This is the correct LOPO setup: P is completely unknown to the model
-    at every stage (Stage 2 and Stage 3).
+Legacy / leaky (pass --main_ckpt): fine-tuning starts from a shared Stage-2
+checkpoint trained on all protocols.
 
-  Legacy / fast (leaky) — pass --main_ckpt
-    Fine-tuning starts from a single Stage-2 checkpoint that was trained on
-    ALL protocols.  The model already saw P during Stage 2.  A UserWarning
-    is printed to flag this.
-
-Usage (leakage-free, recommended):
-    python -m src.training.train_lopo \\
-        --lm_ckpt   checkpoints/lm/best.ckpt \\
-        --tier1_dir data/tier1_grammar \\
-        --tier2_dir data/tier2_scapy \\
-        --ckpt_dir  checkpoints/lopo \\
-        --main_epochs 50 --max_steps 2000 --lr 1e-4
-
-Usage (legacy, leaky):
-    python -m src.training.train_lopo \\
-        --main_ckpt checkpoints/main/best.ckpt \\
-        --tier1_dir data/tier1_grammar \\
-        --tier2_dir data/tier2_scapy \\
+Usage:
+    python -m src.training.train_lopo \
+        --lm_ckpt   checkpoints/lm/<proto>/bylm-....ckpt \
+        --protocol  dns \
+        --tier1_dir data/grammar \
+        --tier2_dir data/protocols \
         --ckpt_dir  checkpoints/lopo
-
-Smoke-test a single protocol (leakage-free):
-    python -m src.training.train_lopo --fast_dev --protocol dns \\
-        --lm_ckpt checkpoints/lm/best.ckpt
 """
 
 from __future__ import annotations
@@ -46,32 +29,11 @@ from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import CSVLogger
 
 from src.training.dataset import (
-    load_tier1_groups, load_tier2_groups, load_tier3_groups,
+    load_tier1_groups, load_tier2_groups,
+    split_tier2_protocols,
     make_format_dataloader, LOPO_PROTOCOLS,
 )
 from src.training.train_main import FieldInferenceModule, train_main
-
-# ── BI benchmark protocol list and Tier-2 name mapping ───────────────────────
-# The 10 BI benchmark protocols and their Tier-2 equivalents (if any).
-# When holding out a BI protocol we must also exclude its Tier-2 counterpart
-# so the model never saw similar data at Stage-2 either.
-BI_LOPO_PROTOCOLS: list[str] = [
-    "bgp", "dhcp", "dnp3", "mavlink", "mirai",
-    "modbus", "ntp48", "smb", "smb2", "tutorial",
-]
-
-BI_TO_TIER2: dict[str, str | None] = {
-    "bgp":      "bgp_raw",
-    "dhcp":     "dhcp",
-    "modbus":   "modbus",
-    "ntp48":    "ntp",
-    "dnp3":     None,
-    "mavlink":  None,
-    "mirai":    None,
-    "smb":      None,
-    "smb2":     None,
-    "tutorial": None,
-}
 
 
 # ── Per-protocol Stage-2 helper ───────────────────────────────────────────────
@@ -103,14 +65,22 @@ def _train_per_protocol_main(
     max_len:       int        = 512,
     num_workers:   int        = 0,
     fast_dev:      bool       = False,
-    tier3_dir:     Path | None = None,
     tier2_exclude: list[str] | None = None,
-    tier3_exclude: list[str] | None = None,
+    d_model:       int        = 128,
+    n_heads:       int        = 4,
+    d_ff:          int        = 512,
+    n_layers:      int        = 4,
+    lm_d_model:               int        = 64,
+    lm_n_heads:               int        = 4,
+    lm_d_ff:                  int        = 256,
+    lm_n_layers:              int        = 2,
+    use_relational_type_head: bool       = False,
+    use_focal_type:           bool       = False,
+    tier2_val_protocols:      list[str] | None = None,
+    tier2_train_val_fraction: float            = 0.0,
 ) -> Path:
     """
     Train a Stage-2 main model excluding the held-out protocol.
-    tier2_exclude: protocol names to drop from Tier-2 (may differ from held_out in BI mode).
-    tier3_exclude: protocol names to drop from Tier-3 (the BI benchmark name).
     Saves checkpoints under ckpt_dir/mains/{held_out}/.
     Skips training if a checkpoint already exists there.
     """
@@ -123,8 +93,7 @@ def _train_per_protocol_main(
         return existing
 
     t2_excl = tier2_exclude if tier2_exclude is not None else [held_out]
-    t3_excl = tier3_exclude if tier3_exclude is not None else [held_out]
-    print(f"  [{held_out}] training Stage-2 main (excl T2={t2_excl}, T3={t3_excl}) ...")
+    print(f"  [{held_out}] training Stage-2 main (excl={t2_excl}) ...")
     best = train_main(
         lm_ckpt_path=str(lm_ckpt),
         tier1_dir=str(tier1_dir),
@@ -137,8 +106,13 @@ def _train_per_protocol_main(
         num_workers=num_workers,
         fast_dev=fast_dev,
         exclude_tier2=t2_excl,
-        exclude_tier3=t3_excl,
-        tier3_dir=str(tier3_dir) if tier3_dir else None,
+        d_model=d_model, n_heads=n_heads, d_ff=d_ff, n_layers=n_layers,
+        lm_d_model=lm_d_model, lm_n_heads=lm_n_heads,
+        lm_d_ff=lm_d_ff, lm_n_layers=lm_n_layers,
+        use_relational_type_head=use_relational_type_head,
+        use_focal_type=use_focal_type,
+        tier2_val_protocols=tier2_val_protocols,
+        tier2_train_val_fraction=tier2_train_val_fraction,
     )
     return best
 
@@ -160,15 +134,33 @@ def _train_one_lopo(
     lr:            float      = 1e-4,
     num_workers:   int        = 0,
     fast_dev:      bool       = False,
-    tier3_dir:     Path | None = None,
-    tier2_exclude: list[str] | None = None,  # what to drop from Tier-2 (BI mode aware)
-    tier3_exclude: list[str] | None = None,  # what to drop from Tier-3 (BI protocol name)
+    tier2_exclude: list[str] | None = None,
+    d_model:       int        = 128,
+    n_heads:       int        = 4,
+    d_ff:          int        = 512,
+    n_layers:      int        = 4,
+    lm_d_model:               int        = 64,
+    lm_n_heads:               int        = 4,
+    lm_d_ff:                  int        = 256,
+    lm_n_layers:              int        = 2,
+    use_relational_type_head: bool       = False,
+    use_focal_type:           bool       = False,
+    use_dynamic_val:          bool       = False,
+    n_val_protocols:          int        = 6,
 ) -> Path:
     """Fine-tune for one held-out protocol. Returns best checkpoint path."""
 
-    # Resolve effective exclusion lists (fall back to held_out for standard mode)
     t2_excl = tier2_exclude if tier2_exclude is not None else [held_out]
-    t3_excl = tier3_exclude if tier3_exclude is not None else [held_out]
+
+    # ── Compute dynamic T2 val split (consistent across Stage 2 and Stage 3) ─
+    t2_val_protos: list[str] | None = None
+    t2_train_val_frac: float = 0.0
+    if use_dynamic_val:
+        _, t2_val_protos = split_tier2_protocols(
+            tier2_dir, t2_excl, n_val=n_val_protocols,
+        )
+        t2_train_val_frac = 0.10
+        print(f"  [{held_out}] dynamic val — T2 val protocols: {sorted(t2_val_protos)}")
 
     # ── Resolve Stage-2 starting checkpoint ───────────────────────────────
     if main_ckpt is None:
@@ -183,21 +175,26 @@ def _train_one_lopo(
             max_len=max_len,
             num_workers=num_workers,
             fast_dev=fast_dev,
-            tier3_dir=tier3_dir,
             tier2_exclude=t2_excl,
-            tier3_exclude=t3_excl,
+            d_model=d_model, n_heads=n_heads, d_ff=d_ff, n_layers=n_layers,
+            lm_d_model=lm_d_model, lm_n_heads=lm_n_heads,
+            lm_d_ff=lm_d_ff, lm_n_layers=lm_n_layers,
+            use_relational_type_head=use_relational_type_head,
+            use_focal_type=use_focal_type,
+            tier2_val_protocols=t2_val_protos,
+            tier2_train_val_fraction=t2_train_val_frac,
         )
 
-    # ── Build training set: Tier1 + Tier2 + Tier3 \ {held_out} ───────────
+    # ── Build training set: grammar + protocols \ {held_out} ───────────
     train_t1, val_t1 = load_tier1_groups(tier1_dir, val_fraction=0.10)
     train_t2, _ = load_tier2_groups(
         tier2_dir,
+        val_protocols=t2_val_protos,
         exclude_protocols=t2_excl,
+        test_fraction=0.0 if t2_val_protos is not None else 0.20,
+        train_val_fraction=0.0,   # Stage 3 FT trains on all train-protocol messages
     )
-    train_t3: list = []
-    if tier3_dir:
-        train_t3 = load_tier3_groups(tier3_dir, exclude_protocols=t3_excl)
-    all_train = train_t1 + train_t2 + train_t3
+    all_train = train_t1 + train_t2
     print(f"  [{held_out}] train groups: {len(all_train):,}")
 
     # Validation: Tier-1 val only — held-out protocol never appears here.
@@ -225,7 +222,7 @@ def _train_one_lopo(
     model.hparams.lr           = lr
     model.hparams.warmup_steps = min(100, max_steps // 10)
     model.hparams.max_steps    = max(max_steps, 1)
-    model.model.unfreeze_lm()
+    model.model.unfreeze_lm()   # allow LM entropy features to adapt during fine-tune
 
     out_dir = ckpt_dir / held_out
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -274,9 +271,8 @@ def _train_one_lopo(
 def train_lopo(
     main_ckpt:   str | None = None,
     lm_ckpt:     str | None = None,
-    tier1_dir:   str = "data/tier1_grammar",
-    tier2_dir:   str = "data/tier2_scapy",
-    tier3_dir:   str | None = None,
+    tier1_dir:   str = "data/grammar",
+    tier2_dir:   str = "data/protocols",
     ckpt_dir:    str = "checkpoints/lopo",
     main_epochs: int   = 50,
     max_steps:   int   = 2_000,
@@ -286,15 +282,22 @@ def train_lopo(
     num_workers: int   = 0,
     fast_dev:    bool  = False,
     protocol:    str | None = None,
-    bi_mode:     bool  = False,
+    d_model:     int   = 128,
+    n_heads:     int   = 4,
+    d_ff:        int   = 512,
+    n_layers:    int   = 4,
+    lm_d_model:               int   = 64,
+    lm_n_heads:               int   = 4,
+    lm_d_ff:                  int   = 256,
+    lm_n_layers:              int   = 2,
+    use_relational_type_head: bool  = False,
+    use_focal_type:           bool  = False,
+    use_dynamic_val:          bool  = False,
+    n_val_protocols:          int   = 6,
+    seed:                     int   = 42,
 ) -> dict[str, Path]:
     """
-    Run LOPO fine-tuning.
-
-    Standard mode (bi_mode=False): iterates over LOPO_PROTOCOLS (Tier-2 names).
-    BI mode (bi_mode=True): iterates over BI_LOPO_PROTOCOLS (10 BI benchmark
-      names), correctly excluding the mapped Tier-2 protocol AND the Tier-3
-      protocol by BI name.
+    Run LOPO fine-tuning over LOPO_PROTOCOLS (or a single --protocol).
 
     Pass --lm_ckpt for leakage-free LOPO (recommended).
     Pass --main_ckpt for a quick legacy run (UserWarning issued).
@@ -318,27 +321,17 @@ def train_lopo(
             stacklevel=2,
         )
 
+    pl.seed_everything(seed, workers=True)
     tier1_dir = Path(tier1_dir)
     tier2_dir = Path(tier2_dir)
     ckpt_dir  = Path(ckpt_dir)
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    if bi_mode:
-        protocols = [protocol] if protocol else BI_LOPO_PROTOCOLS
-    else:
-        protocols = [protocol] if protocol else LOPO_PROTOCOLS
+    protocols = [protocol] if protocol else LOPO_PROTOCOLS
 
     results: dict[str, Path] = {}
     for proto in protocols:
         print(f"\n=== LOPO: held-out = {proto} ===")
-
-        if bi_mode:
-            t2_name = BI_TO_TIER2.get(proto)
-            t2_excl = [t2_name] if t2_name else []
-            t3_excl = [proto]
-            print(f"  excl Tier-2={t2_excl}  excl Tier-3={t3_excl}")
-        else:
-            t2_excl = t3_excl = None  # _train_one_lopo defaults to [held_out]
 
         best = _train_one_lopo(
             held_out=proto,
@@ -354,9 +347,13 @@ def train_lopo(
             lr=lr,
             num_workers=num_workers,
             fast_dev=fast_dev,
-            tier3_dir=Path(tier3_dir) if tier3_dir else None,
-            tier2_exclude=t2_excl,
-            tier3_exclude=t3_excl,
+            d_model=d_model, n_heads=n_heads, d_ff=d_ff, n_layers=n_layers,
+            lm_d_model=lm_d_model, lm_n_heads=lm_n_heads,
+            lm_d_ff=lm_d_ff, lm_n_layers=lm_n_layers,
+            use_relational_type_head=use_relational_type_head,
+            use_focal_type=use_focal_type,
+            use_dynamic_val=use_dynamic_val,
+            n_val_protocols=n_val_protocols,
         )
         results[proto] = best
 
@@ -385,11 +382,8 @@ if __name__ == "__main__":
         help="Single shared Stage-2 checkpoint (legacy, leaky — the model already "
              "saw each held-out protocol during Stage-2 training).",
     )
-    p.add_argument("--tier1_dir",   default="data/tier1_grammar")
-    p.add_argument("--tier2_dir",   default="data/tier2_scapy")
-    p.add_argument("--tier3_dir",   default=None,
-                   help="Path to tier3_labeled (BI benchmark labeled data). "
-                        "9 protocols used per fold, held-out excluded.")
+    p.add_argument("--tier1_dir",   default="data/grammar")
+    p.add_argument("--tier2_dir",   default="data/protocols")
     p.add_argument("--ckpt_dir",    default="checkpoints/lopo")
     p.add_argument("--main_epochs", type=int,   default=50,
                    help="Epochs for per-protocol Stage-2 training (--lm_ckpt mode only).")
@@ -399,10 +393,22 @@ if __name__ == "__main__":
     p.add_argument("--lr",          type=float, default=1e-4)
     p.add_argument("--num_workers", type=int,   default=0)
     p.add_argument("--fast_dev",  action="store_true")
-    p.add_argument("--bi_mode",   action="store_true",
-                   help="Iterate over the 10 BI benchmark protocols with correct "
-                        "Tier-2/Tier-3 name mapping (use with --tier3_dir).")
-    p.add_argument("--protocol",  default=None,
-                   help="Run only this protocol (debug / smoke test).")
+    p.add_argument("--protocol",  default=None)
+    p.add_argument("--d_model",    type=int, default=128)
+    p.add_argument("--n_heads",    type=int, default=4)
+    p.add_argument("--d_ff",       type=int, default=512)
+    p.add_argument("--n_layers",   type=int, default=4)
+    p.add_argument("--lm_d_model", type=int, default=64)
+    p.add_argument("--lm_n_heads", type=int, default=4)
+    p.add_argument("--lm_d_ff",    type=int, default=256)
+    p.add_argument("--lm_n_layers",              type=int, default=2)
+    p.add_argument("--use_relational_type_head", action="store_true")
+    p.add_argument("--use_focal_type",           action="store_true")
+    p.add_argument("--use_dynamic_val",          action="store_true",
+                   help="Randomly split T2 into train/val instead of fixed coap/ospf.")
+    p.add_argument("--n_val_protocols",          type=int, default=6,
+                   help="T2 val protocols: 6 for LOPO (16 remain), 3 for L4PO (13 remain).")
+    p.add_argument("--seed",                     type=int, default=42,
+                   help="Global random seed for reproducibility.")
     args = p.parse_args()
     train_lopo(**vars(args))

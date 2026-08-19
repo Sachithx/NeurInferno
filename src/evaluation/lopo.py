@@ -1,11 +1,11 @@
 """
-LOPO evaluation: run our trained model on held-out Tier-2 protocol messages.
+LOPO evaluation: run a trained model on held-out protocol test messages.
 
-For each of the 10 LOPO protocols:
+For each of the 12 LOPO protocols:
   1. Load the LOPO fine-tuned checkpoint.
-  2. Load held-out Tier-2 test messages (with ground truth).
+  2. Load held-out test messages (with ground truth).
   3. Run inference in batches of n_msgs=32.
-  4. Compute Precision / Recall / FPR / F1 against Scapy ground truth.
+  4. Compute Precision / Recall / FPR / F1 against labeled ground truth.
 
 Returns a dict {protocol: BoundaryMetrics} and per-protocol PR-curve data.
 """
@@ -26,6 +26,60 @@ from src.evaluation.metrics import (
     compute_pr_curve, auprc,
 )
 from src.model.encoder import PAD_IDX
+
+
+def _ckpt_step_and_loss(p: Path) -> tuple[int, float]:
+    """Parse (step, val/loss_total) from a Lightning checkpoint path.
+
+    Fine-tune filenames look like
+      lopo-<label>-step=00588-val/loss_total=0.3986.ckpt
+    Extra later-step files can accumulate because the slash in the filename
+    prevents Lightning from deleting older checkpoints.  The reference tables use
+    the first validation checkpoint of each fine-tune (smallest step), then
+    the lowest loss_total at that step.
+    """
+    step = 10**9
+    for part in (p.name, p.parent.name, str(p)):
+        if "step=" in part:
+            try:
+                step = int(part.split("step=")[1].split("-")[0])
+                break
+            except (IndexError, ValueError):
+                pass
+    loss = float("inf")
+    for part in (p.name, p.parent.name):
+        for key in ("loss_total=", "val_loss="):
+            if key in part:
+                try:
+                    loss = float(part.split(key)[1].split(".ckpt")[0].split("-")[0])
+                    return step, loss
+                except (IndexError, ValueError):
+                    pass
+    return step, loss
+
+
+def _find_best_ckpt(
+    directory: Path,
+    preferred_name: str | None = None,
+) -> Path | None:
+    """Select a fine-tune checkpoint.
+
+    If ``preferred_name`` is given and that file exists under ``directory``,
+    use it (this is how the shipped reference tables are reproduced).
+    Otherwise take the earliest ``step=`` and, at that step, the lowest
+    ``loss_total``.
+    """
+    ckpts = [p for p in directory.rglob("*.ckpt") if "mains" not in p.parts]
+    if not ckpts:
+        return None
+    if preferred_name:
+        for p in ckpts:
+            if p.name == preferred_name:
+                return p
+    parsed = [(_ckpt_step_and_loss(p), p) for p in ckpts]
+    min_step = min(step for (step, _), _ in parsed)
+    at_step = [(loss, p) for (step, loss), p in parsed if step == min_step]
+    return min(at_step, key=lambda t: t[0])[1]
 
 
 # ── Batched inference ─────────────────────────────────────────────────────────
@@ -121,7 +175,7 @@ def evaluate_protocol(
     scores_list, gt_list = run_model_inference(
         model, msgs, n_msgs=n_msgs_batch, max_len=max_len, device=device)
 
-    # Per-message metrics at threshold 0.5
+    # Per-message metrics at the given threshold
     per_msg = [
         compute_boundary_metrics(
             [1 if s >= threshold else 0 for s in sc], gt
@@ -167,27 +221,12 @@ def run_lopo_evaluation(
     pr_curves: dict[str, dict] = {}
 
     for proto in protocols:
-        # Find checkpoint — PL may create subdirs from filename slashes
-        ckpt_candidates = list((lopo_ckpt_dir / proto).rglob("*.ckpt"))
-        if not ckpt_candidates:
+        ckpt = _find_best_ckpt(lopo_ckpt_dir / proto)
+        if ckpt is None:
             print(f"  [{proto}] WARNING: no checkpoint found, skipping")
             continue
-
-        def _loss_from_path(p: Path) -> float:
-            # Path looks like .../val/loss_total=1.8716.ckpt
-            try:
-                return float(p.stem.split("loss_total=")[1])
-            except Exception:
-                try:
-                    return float(p.parent.name.split("loss_total=")[1])
-                except Exception:
-                    return float("inf")
-
-        ckpt = min(ckpt_candidates, key=_loss_from_path)
         print(f"  [{proto}] using {ckpt.name}")
 
-        import torch as _torch
-        device = "cuda" if _torch.cuda.is_available() else "cpu"
         try:
             metrics, extra = evaluate_protocol(
                 protocol=proto, lopo_ckpt=ckpt, tier2_dir=tier2_dir,

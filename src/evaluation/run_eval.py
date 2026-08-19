@@ -1,19 +1,18 @@
 """
-Full Phase-5 evaluation pipeline.
+Unified evaluation pipeline: LOPO + L4PO.
 
-Runs LOPO evaluation for our model + BI baseline, writes:
-  results/comparison_table.csv
-  results/pr_curves/{protocol}.npz
-  results/ablations.csv         (placeholder — filled by ablation runs)
-  results/REPORT.md             (via report.py)
+Scans checkpoint directories and evaluates all found checkpoints:
+  LOPO : checkpoints/seed789/lopo/<protocol>/  →  results/seed789/lopo_results.csv
+  L4PO : checkpoints/seed789/l4po/<label>/     →  results/seed789/l4po/l4po_<label>.csv
+                                               →  results/seed789/l4po/l4po_aggregate.csv
 
 Usage:
     python -m src.evaluation.run_eval \
-        --lopo_ckpt_dir checkpoints/lopo \
-        --tier2_dir     data/tier2_scapy \
-        --results_dir   results \
-        [--skip_bi]     # skip slow BI baseline (useful for quick eval)
-        [--fast_dev]    # 50 messages per protocol, skip BI
+        --ckpt_root   checkpoints/seed789 \
+        --tier2_dir   data/protocols \
+        --results_dir results/seed789 \
+        --threshold   0.75 \
+        --max_msgs    1000
 """
 
 from __future__ import annotations
@@ -26,197 +25,430 @@ from pathlib import Path
 import numpy as np
 
 from src.training.dataset import LOPO_PROTOCOLS
-from src.evaluation.lopo import run_lopo_evaluation
-from src.evaluation.baseline_comparison import run_bi_baselines
-from src.evaluation.metrics import BoundaryMetrics
+from src.training.train_main import FieldInferenceModule
+from src.evaluation.lopo import run_lopo_evaluation, run_model_inference, _find_best_ckpt
+from src.evaluation.ground_truth import load_labeled_messages
+from src.evaluation.metrics import (
+    BoundaryMetrics, compute_boundary_metrics, aggregate_metrics,
+)
+
+# Threshold values used for the sensitivity sweep (saved alongside main results)
+_TAU_SWEEP = np.round(np.linspace(0.05, 0.95, 50), 3).tolist()
 
 
-# ── CSV helpers ───────────────────────────────────────────────────────────────
-
-def _m_row(m: BoundaryMetrics | None, prefix: str = "") -> dict[str, str]:
-    if m is None:
-        return {f"{prefix}P": "N/A", f"{prefix}R": "N/A",
-                f"{prefix}FPR": "N/A", f"{prefix}F1": "N/A"}
-    return {
-        f"{prefix}P":   f"{m.precision:.4f}",
-        f"{prefix}R":   f"{m.recall:.4f}",
-        f"{prefix}FPR": f"{m.fpr:.4f}",
-        f"{prefix}F1":  f"{m.f1:.4f}",
-    }
-
-
-def write_comparison_csv(
-    ours:     dict[str, BoundaryMetrics],
-    bi:       dict[str, BoundaryMetrics | None],
-    out_path: Path,
-) -> None:
-    protocols = LOPO_PROTOCOLS
-    fieldnames = ["protocol",
-                  "Ours P", "Ours R", "Ours FPR", "Ours F1",
-                  "BI P",   "BI R",   "BI FPR",   "BI F1"]
-    rows = []
-    sum_ours = {"P": 0.0, "R": 0.0, "FPR": 0.0, "F1": 0.0}
-    sum_bi   = {"P": 0.0, "R": 0.0, "FPR": 0.0, "F1": 0.0}
-    n_ours = 0; n_bi = 0
-
-    for proto in protocols:
-        m_o = ours.get(proto)
-        m_b = bi.get(proto)
-        row = {"protocol": proto}
-        row.update(_m_row(m_o, "Ours "))
-        row.update(_m_row(m_b, "BI "))
-        rows.append(row)
-        if m_o:
-            sum_ours["P"]   += m_o.precision; sum_ours["R"]   += m_o.recall
-            sum_ours["FPR"] += m_o.fpr;       sum_ours["F1"]  += m_o.f1
-            n_ours += 1
-        if m_b:
-            sum_bi["P"]   += m_b.precision; sum_bi["R"]   += m_b.recall
-            sum_bi["FPR"] += m_b.fpr;       sum_bi["F1"]  += m_b.f1
-            n_bi += 1
-
-    # Average row
-    def _avg(d, n):
-        return {k: d[k] / n if n > 0 else float("nan") for k in d}
-
-    avg_o = _avg(sum_ours, n_ours)
-    avg_b = _avg(sum_bi, n_bi)
-    avg_row = {"protocol": "AVERAGE"}
-    avg_row.update({f"Ours {k}": f"{v:.4f}" for k, v in avg_o.items()})
-    avg_row.update({f"BI {k}":   f"{v:.4f}" if not np.isnan(v) else "N/A"
-                    for k, v in avg_b.items()})
-    rows.append(avg_row)
-
-    # Delta row
-    delta_row = {"protocol": "DELTA (Ours - BI)"}
-    for k in ["P", "R", "FPR", "F1"]:
-        if n_bi > 0:
-            delta_row[f"Ours {k}"] = f"{avg_o[k] - avg_b[k]:+.4f}"
-        else:
-            delta_row[f"Ours {k}"] = "N/A"
-        delta_row[f"BI {k}"] = ""
-    rows.append(delta_row)
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        w.writerows(rows)
-    print(f"Saved comparison table → {out_path}")
+def _preferred_ckpt_name(label: str) -> str | None:
+    """Filename recorded in results/reference/l4po/l4po_<label>.csv, if any."""
+    ref = Path("results/reference/l4po") / f"l4po_{label}.csv"
+    if not ref.exists():
+        return None
+    with ref.open() as f:
+        for row in csv.DictReader(f):
+            ck = (row.get("checkpoint") or "").strip()
+            if ck:
+                return Path(ck).name
+    return None
 
 
-def save_pr_curves(pr_curves: dict[str, dict], out_dir: Path) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for proto, data in pr_curves.items():
-        np.savez(
-            out_dir / f"{proto}.npz",
-            precisions=data["precisions"],
-            recalls=data["recalls"],
-            thresholds=data["thresholds"],
-            auprc=np.array([data["auprc"]]),
+def _label_to_held_out(label: str) -> list[str]:
+    """Recover held-out protocol list from a sorted-joined label string.
+
+    e.g. 'arp_bgp_raw_igmp_ip' → ['arp', 'bgp_raw', 'igmp', 'ip']
+    """
+    remaining = label
+    found = []
+    for proto in sorted(LOPO_PROTOCOLS):
+        if remaining == proto or remaining.startswith(proto + "_"):
+            found.append(proto)
+            remaining = remaining[len(proto):]
+            if remaining.startswith("_"):
+                remaining = remaining[1:]
+    if remaining:
+        raise ValueError(
+            f"Could not fully parse label '{label}' — leftover: '{remaining}'. "
+            f"Known protocols: {sorted(LOPO_PROTOCOLS)}"
         )
-    print(f"Saved PR curves → {out_dir}")
+    return found
 
 
-def write_ablations_placeholder(out_path: Path) -> None:
-    """Write empty ablation CSV with correct headers (filled by ablation runs)."""
-    if out_path.exists():
-        return
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = ["ablation", "avg_precision", "avg_recall", "avg_fpr", "avg_f1"]
-    ablations = [
-        "full_model",
-        "no_cross_msg",
-        "no_consistency_loss",
-        "no_entropy_feat",
-        "tier1_only",
-        "tier2_only",
-        "bio_tagging_baseline",
-    ]
-    with open(out_path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fieldnames)
-        w.writeheader()
-        for name in ablations:
-            w.writerow({k: ("" if k != "ablation" else name) for k in fieldnames})
-    print(f"Saved ablation placeholder → {out_path}")
+# ── LOPO evaluation ───────────────────────────────────────────────────────────
+
+def _sweep_from_pr_curves(pr_curves: dict) -> list[dict]:
+    """Compute mean P/R/F1 at each tau from in-memory per-protocol PR curve data."""
+    curve = []
+    for tau in _TAU_SWEEP:
+        ps, rs, f1s = [], [], []
+        for proto, data in pr_curves.items():
+            thresholds = np.asarray(data["thresholds"])
+            precisions = np.asarray(data["precisions"])
+            recalls    = np.asarray(data["recalls"])
+            idx = int(np.argmin(np.abs(thresholds - tau)))
+            p  = float(precisions[idx])
+            r  = float(recalls[idx])
+            f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+            ps.append(p); rs.append(r); f1s.append(f1)
+        if ps:
+            curve.append({
+                "tau": round(float(tau), 3),
+                "mean_P":  round(float(np.mean(ps)),  4),
+                "mean_R":  round(float(np.mean(rs)),  4),
+                "mean_F1": round(float(np.mean(f1s)), 4),
+            })
+    return curve
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+def eval_lopo(
+    lopo_ckpt_dir: Path,
+    tier2_dir:     Path,
+    results_dir:   Path,
+    threshold:     float,
+    max_msgs:      int,
+    device:        str,
+) -> dict[str, BoundaryMetrics]:
+    print("\n" + "=" * 60)
+    print("LOPO EVALUATION")
+    print("=" * 60)
 
-def run_eval(
-    lopo_ckpt_dir: str = "checkpoints/lopo",
-    tier2_dir:     str = "data/tier2_scapy",
-    results_dir:   str = "results",
-    max_msgs:      int = 1000,
-    bi_max_msgs:   int = 100,
-    skip_bi:       bool = False,
-    fast_dev:      bool = False,
-) -> None:
-    lopo_ckpt_dir = Path(lopo_ckpt_dir)
-    tier2_dir     = Path(tier2_dir)
-    results_dir   = Path(results_dir)
-    results_dir.mkdir(parents=True, exist_ok=True)
-
-    if fast_dev:
-        max_msgs    = 50
-        bi_max_msgs = 20
-        skip_bi     = True
-
-    # ── Stage 5.2: LOPO evaluation ─────────────────────────────────────────
-    print("\n" + "="*60)
-    print("LOPO EVALUATION (our model)")
-    print("="*60)
     ours, pr_curves = run_lopo_evaluation(
         lopo_ckpt_dir=lopo_ckpt_dir,
         tier2_dir=tier2_dir,
         max_msgs=max_msgs,
         n_msgs_batch=32,
+        threshold=threshold,
+        device=device,
     )
 
-    save_pr_curves(pr_curves, results_dir / "pr_curves")
+    # Save PR curves
+    pr_dir = results_dir / "pr_curves"
+    pr_dir.mkdir(parents=True, exist_ok=True)
+    for proto, data in pr_curves.items():
+        np.savez(
+            pr_dir / f"{proto}.npz",
+            precisions=data["precisions"],
+            recalls=data["recalls"],
+            thresholds=data["thresholds"],
+            auprc=np.array([data["auprc"]]),
+        )
 
-    # ── Stage 5.3: BI baseline ─────────────────────────────────────────────
-    bi: dict[str, BoundaryMetrics | None] = {}
-    if not skip_bi:
-        print("\n" + "="*60)
-        print("BI BASELINE")
-        print("="*60)
-        bi = run_bi_baselines(tier2_dir=tier2_dir, max_msgs=bi_max_msgs)
-    else:
-        print("\nSkipping BI baseline (--skip_bi)")
-        bi = {p: None for p in LOPO_PROTOCOLS}
+    # Compute and save tau sweep (no extra inference — derived from PR curves)
+    tau_sweep = _sweep_from_pr_curves(pr_curves)
+    if tau_sweep:
+        with open(results_dir / "lopo_tau_sweep.json", "w") as f:
+            json.dump({"curve": tau_sweep}, f, indent=2)
 
-    # ── Write outputs ───────────────────────────────────────────────────────
-    write_comparison_csv(ours, bi, results_dir / "comparison_table.csv")
-    write_ablations_placeholder(results_dir / "ablations.csv")
-
-    # Generate REPORT.md
-    from src.evaluation.report import generate_report
-    generate_report(results_dir)
-
-    # Summary print
-    print("\n" + "="*60)
-    print("SUMMARY")
-    print("="*60)
-    print(f"{'Protocol':<12} {'Ours F1':>8} {'BI F1':>8} {'Delta':>8}")
-    print("-"*40)
+    # Write results CSV
+    fieldnames = ["protocol", "P", "R", "FPR", "F1"]
+    rows = []
+    total = {"P": 0.0, "R": 0.0, "FPR": 0.0, "F1": 0.0}
+    n = 0
     for proto in LOPO_PROTOCOLS:
-        o_f1 = f"{ours[proto].f1:.3f}" if proto in ours else "  N/A"
-        b_f1 = f"{bi[proto].f1:.3f}"   if bi.get(proto) else "  N/A"
-        delta = ""
-        if proto in ours and bi.get(proto):
-            delta = f"{ours[proto].f1 - bi[proto].f1:+.3f}"
-        print(f"{proto:<12} {o_f1:>8} {b_f1:>8} {delta:>8}")
+        m = ours.get(proto)
+        if m is None:
+            rows.append({"protocol": proto, "P": "N/A", "R": "N/A",
+                         "FPR": "N/A", "F1": "N/A"})
+            continue
+        rows.append({"protocol": proto,
+                     "P": f"{m.precision:.4f}", "R": f"{m.recall:.4f}",
+                     "FPR": f"{m.fpr:.4f}",     "F1": f"{m.f1:.4f}"})
+        total["P"] += m.precision; total["R"] += m.recall
+        total["FPR"] += m.fpr;     total["F1"] += m.f1
+        n += 1
+    if n:
+        rows.append({"protocol": "AVERAGE",
+                     "P": f"{total['P']/n:.4f}", "R": f"{total['R']/n:.4f}",
+                     "FPR": f"{total['FPR']/n:.4f}", "F1": f"{total['F1']/n:.4f}"})
+
+    out_path = results_dir / "lopo_results.csv"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"\nSaved LOPO results → {out_path}")
+
+    return ours
+
+
+# ── L4PO evaluation ───────────────────────────────────────────────────────────
+
+def _eval_one_l4po_split(
+    ckpt_path:   Path,
+    held_out:    list[str],
+    tier2_dir:   Path,
+    results_dir: Path,
+    threshold:   float,
+    max_msgs:    int,
+    device:      str,
+) -> tuple[dict[str, dict], list[dict]]:
+    """Evaluate one L4PO checkpoint. Returns (per-proto results, tau sweep)."""
+    model = FieldInferenceModule.load_from_checkpoint(str(ckpt_path), strict=True)
+    model.eval()
+    model.to(device)
+
+    # Collect raw scores for all held-out protocols (used for tau sweep)
+    proto_scores: dict[str, tuple[list, list]] = {}
+
+    all_results: dict[str, dict] = {}
+    for proto in held_out:
+        print(f"  [{proto}]", end="  ")
+        try:
+            msgs = load_labeled_messages(tier2_dir, proto, max_msgs=max_msgs)
+        except FileNotFoundError as e:
+            print(f"SKIP: {e}")
+            continue
+        print(f"{len(msgs)} msgs", end="  ")
+        scores_list, gt_list = run_model_inference(
+            model, msgs, n_msgs=32, max_len=512, device=device,
+        )
+        proto_scores[proto] = (scores_list, gt_list)
+        per_msg = [
+            compute_boundary_metrics(
+                [1 if s >= threshold else 0 for s in sc], gt
+            )
+            for sc, gt in zip(scores_list, gt_list)
+        ]
+        agg = aggregate_metrics(per_msg)
+        all_results[proto] = {
+            "precision": agg.precision, "recall": agg.recall,
+            "fpr": agg.fpr,             "f1": agg.f1,
+            "n_messages": len(msgs),
+        }
+        print(f"P={agg.precision:.3f}  R={agg.recall:.3f}  "
+              f"FPR={agg.fpr:.3f}  F1={agg.f1:.3f}")
+
+    # Tau sweep: re-threshold in-memory (no extra model loading)
+    tau_sweep: list[dict] = []
+    if proto_scores:
+        for tau in _TAU_SWEEP:
+            ps, rs, f1s = [], [], []
+            for proto, (sc_list, gt_list) in proto_scores.items():
+                per_msg = [
+                    compute_boundary_metrics(
+                        [1 if s >= tau else 0 for s in sc], gt
+                    )
+                    for sc, gt in zip(sc_list, gt_list)
+                ]
+                agg = aggregate_metrics(per_msg)
+                ps.append(agg.precision); rs.append(agg.recall); f1s.append(agg.f1)
+            tau_sweep.append({
+                "tau":    round(float(tau), 3),
+                "mean_P":  round(float(np.mean(ps)),  4),
+                "mean_R":  round(float(np.mean(rs)),  4),
+                "mean_F1": round(float(np.mean(f1s)), 4),
+            })
+
+    # Write per-split results CSV
+    run_label = "_".join(sorted(held_out))
+    csv_path  = results_dir / f"l4po_{run_label}.csv"
+    data_rows = [
+        {"protocol": proto,
+         "precision": f"{m['precision']:.4f}", "recall": f"{m['recall']:.4f}",
+         "fpr": f"{m['fpr']:.4f}", "f1": f"{m['f1']:.4f}",
+         "n_messages": int(m["n_messages"]), "checkpoint": Path(ckpt_path).name}
+        for proto, m in all_results.items()
+    ]
+    if data_rows:
+        avgs = {k: sum(float(r[k]) for r in data_rows) / len(data_rows)
+                for k in ("precision", "recall", "fpr", "f1")}
+        data_rows.append({
+            "protocol": f"AVERAGE ({len(all_results)} protocols)",
+            "precision": f"{avgs['precision']:.4f}", "recall": f"{avgs['recall']:.4f}",
+            "fpr": f"{avgs['fpr']:.4f}", "f1": f"{avgs['f1']:.4f}",
+            "n_messages": sum(int(r["n_messages"]) for r in data_rows[:-1]),
+            "checkpoint": "",
+        })
+    fieldnames = ["protocol", "precision", "recall", "fpr", "f1",
+                  "n_messages", "checkpoint"]
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(data_rows)
+    print(f"  Saved → {csv_path}")
+
+    return all_results, tau_sweep
+
+
+def eval_l4po(
+    l4po_ckpt_dir: Path,
+    tier2_dir:     Path,
+    results_dir:   Path,
+    threshold:     float,
+    max_msgs:      int,
+    device:        str,
+) -> None:
+    print("\n" + "=" * 60)
+    print("L4PO EVALUATION")
+    print("=" * 60)
+
+    if not l4po_ckpt_dir.is_dir():
+        print(f"No L4PO checkpoint directory {l4po_ckpt_dir} — skipping.")
+        return
+
+    split_dirs = sorted(
+        d for d in l4po_ckpt_dir.iterdir()
+        if d.is_dir() and not d.name.startswith(".")
+    )
+    if not split_dirs:
+        print("No L4PO checkpoint directories found — skipping.")
+        return
+
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    all_tau_sweeps: list[list[dict]] = []
+
+    for split_dir in split_dirs:
+        label = split_dir.name
+
+        try:
+            held_out = _label_to_held_out(label)
+        except ValueError:
+            continue  # not a split label (e.g. logs/, mains/)
+
+        ckpt = _find_best_ckpt(
+            split_dir, preferred_name=_preferred_ckpt_name(label),
+        )
+        if ckpt is None:
+            print(f"\n[{label}] No checkpoint found — skipping.")
+            continue
+
+        print(f"\n[{label}]  held-out: {held_out}")
+        _, tau_sweep = _eval_one_l4po_split(
+            ckpt_path=ckpt,
+            held_out=held_out,
+            tier2_dir=tier2_dir,
+            results_dir=results_dir,
+            threshold=threshold,
+            max_msgs=max_msgs,
+            device=device,
+        )
+        if tau_sweep:
+            all_tau_sweeps.append(tau_sweep)
+
+    # Aggregate L4PO tau sweep across splits
+    if all_tau_sweeps:
+        agg_sweep = []
+        for i, tau_val in enumerate(_TAU_SWEEP):
+            ps  = [s[i]["mean_P"]  for s in all_tau_sweeps if i < len(s)]
+            rs  = [s[i]["mean_R"]  for s in all_tau_sweeps if i < len(s)]
+            f1s = [s[i]["mean_F1"] for s in all_tau_sweeps if i < len(s)]
+            agg_sweep.append({
+                "tau":    round(float(tau_val), 3),
+                "mean_P":  round(float(np.mean(ps)),  4) if ps  else 0.0,
+                "mean_R":  round(float(np.mean(rs)),  4) if rs  else 0.0,
+                "mean_F1": round(float(np.mean(f1s)), 4) if f1s else 0.0,
+            })
+        with open(results_dir / "l4po_tau_sweep.json", "w") as f:
+            json.dump({"curve": agg_sweep}, f, indent=2)
+
+    # Aggregate per-protocol metrics across splits
+    print("\n" + "=" * 60)
+    print("L4PO AGGREGATE")
+    print("=" * 60)
+    from src.evaluation.aggregate_l4po import (
+        load_seed_results, aggregate, print_table, write_summary_csv,
+    )
+    records = load_seed_results(results_dir)
+    if records:
+        per_proto, overall = aggregate(records)
+        print_table(per_proto, overall)
+        write_summary_csv(per_proto, overall, results_dir / "l4po_aggregate.csv")
+
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+
+def _print_summary(lopo: dict[str, BoundaryMetrics]) -> None:
+    print("\n" + "=" * 60)
+    print("LOPO SUMMARY")
+    print("=" * 60)
+    print(f"{'Protocol':<12} {'P':>7} {'R':>7} {'FPR':>7} {'F1':>7}")
+    print("-" * 44)
+    total_f1 = 0.0; n = 0
+    for proto in LOPO_PROTOCOLS:
+        m = lopo.get(proto)
+        if m:
+            print(f"{proto:<12} {m.precision:>7.4f} {m.recall:>7.4f} "
+                  f"{m.fpr:>7.4f} {m.f1:>7.4f}")
+            total_f1 += m.f1; n += 1
+        else:
+            print(f"{proto:<12}     N/A")
+    if n:
+        print("-" * 44)
+        print(f"{'AVERAGE':<12} {'':>7} {'':>7} {'':>7} {total_f1/n:>7.4f}")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def run_eval(
+    ckpt_root:    str   = "checkpoints/seed789",
+    tier2_dir:    str   = "data/protocols",
+    results_dir:  str   = "results/seed789",
+    threshold:    float = 0.75,
+    max_msgs:     int   = 1000,
+    device:       str   = "auto",
+    skip_lopo:    bool  = False,
+    skip_l4po:    bool  = False,
+) -> None:
+    import torch as _torch
+    if device == "auto":
+        device = "cuda" if _torch.cuda.is_available() else "cpu"
+    print(f"Device: {device}  |  threshold: {threshold}  |  max_msgs: {max_msgs}")
+
+    ckpt_root   = Path(ckpt_root)
+    tier2_dir   = Path(tier2_dir)
+    results_dir = Path(results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    lopo_results: dict[str, BoundaryMetrics] = {}
+
+    if not skip_lopo:
+        lopo_results = eval_lopo(
+            lopo_ckpt_dir=ckpt_root / "lopo",
+            tier2_dir=tier2_dir,
+            results_dir=results_dir,
+            threshold=threshold,
+            max_msgs=max_msgs,
+            device=device,
+        )
+
+    if not skip_l4po:
+        eval_l4po(
+            l4po_ckpt_dir=ckpt_root / "l4po",
+            tier2_dir=tier2_dir,
+            results_dir=results_dir / "l4po",
+            threshold=threshold,
+            max_msgs=max_msgs,
+            device=device,
+        )
+
+    if lopo_results:
+        _print_summary(lopo_results)
+
+    print("\n" + "=" * 60)
+    print("ALL DONE")
+    print(f"  LOPO results : {results_dir / 'lopo_results.csv'}")
+    print(f"  L4PO results : {results_dir / 'l4po' / 'l4po_aggregate.csv'}")
+    print("=" * 60)
 
 
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--lopo_ckpt_dir", default="checkpoints/lopo")
-    p.add_argument("--tier2_dir",     default="data/tier2_scapy")
-    p.add_argument("--results_dir",   default="results")
-    p.add_argument("--max_msgs",      type=int, default=1000)
-    p.add_argument("--bi_max_msgs",   type=int, default=100)
-    p.add_argument("--skip_bi",       action="store_true")
-    p.add_argument("--fast_dev",      action="store_true")
+    p = argparse.ArgumentParser(
+        description="Evaluate LOPO and L4PO checkpoints."
+    )
+    p.add_argument("--ckpt_root",    default="checkpoints/seed789")
+    p.add_argument("--tier2_dir",    default="data/protocols")
+    p.add_argument("--results_dir",  default="results/seed789")
+    p.add_argument("--threshold",    type=float, default=0.75)
+    p.add_argument("--max_msgs",     type=int,   default=1000)
+    p.add_argument("--device",       default="auto")
+    p.add_argument("--skip_lopo",    action="store_true")
+    p.add_argument("--skip_l4po",    action="store_true")
     args = p.parse_args()
-    run_eval(**vars(args))
+    run_eval(
+        ckpt_root=args.ckpt_root,
+        tier2_dir=args.tier2_dir,
+        results_dir=args.results_dir,
+        threshold=args.threshold,
+        max_msgs=args.max_msgs,
+        device=args.device,
+        skip_lopo=args.skip_lopo,
+        skip_l4po=args.skip_l4po,
+    )

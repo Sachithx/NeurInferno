@@ -26,13 +26,45 @@ from src.data_generation.label_format import FIELD_TYPE_IDS
 _UNK = FIELD_TYPE_IDS["UNKNOWN"]
 
 # ── Held-out splits ──────────────────────────────────────────────────────────
-# These Tier-2 protocols are withheld entirely as the structural val set.
+# Structural validation protocols.  "coap" is listed for compatibility with
+# the paper training run; it is simply skipped when absent from data/protocols.
+# With the 12-protocol set this leaves only ospf in the val split (unless ospf
+# itself is the LOPO/L4PO hold-out).  Do not change this list — training
+# dynamics depend on it.
 VAL_TIER2_PROTOCOLS: list[str] = ["coap", "ospf"]
 
-# 10 LOPO protocols (Tier-2 protocols aligned with BI benchmark themes)
+
+def split_tier2_protocols(
+    tier2_dir:         Path,
+    exclude_protocols: list[str],
+    n_val:             int  = 6,
+    seed:              int  = 42,
+) -> tuple[list[str], list[str]]:
+    """
+    From available Tier-2 protocols (minus excluded ones), randomly assign
+    n_val protocols entirely to validation and the rest to training.
+
+    Used only when --use_dynamic_val is passed (the paper run does not).
+
+    Returns (train_protocols, val_protocols).
+    """
+    excl = set(exclude_protocols)
+    available = sorted(
+        d.name
+        for d in tier2_dir.iterdir()
+        if d.is_dir() and (d / "messages.jsonl").exists() and d.name not in excl
+    )
+    n_val = min(n_val, len(available) - 1)   # always keep ≥1 train protocol
+    shuffled = list(available)
+    random.Random(seed).shuffle(shuffled)
+    val_protos   = shuffled[:n_val]
+    train_protos = shuffled[n_val:]
+    return train_protos, val_protos
+
+# 12 protocols used for LOPO / L4PO
 LOPO_PROTOCOLS: list[str] = [
-    "bgp_raw", "dhcp", "modbus", "ntp",
-    "dns", "tcp", "udp", "ip", "icmp", "arp",
+    "arp", "bgp_raw", "dhcp", "dns", "icmp", "igmp",
+    "ip", "modbus", "ntp", "ospf", "tcp", "udp",
 ]
 
 
@@ -111,18 +143,24 @@ def load_tier1_groups(
 
 
 def load_tier2_groups(
-    tier2_dir:         Path,
-    val_protocols:     list[str] | None = None,
-    exclude_protocols: list[str] | None = None,
-    test_fraction:     float = 0.20,
+    tier2_dir:          Path,
+    val_protocols:      list[str] | None = None,
+    exclude_protocols:  list[str] | None = None,
+    test_fraction:      float = 0.20,
+    train_val_fraction: float = 0.0,
 ) -> tuple[list[FormatGroup], list[FormatGroup]]:
     """
     Load Tier 2, returning (train_groups, val_groups) split by protocol.
 
-    For protocols that end up in val_groups (the LOPO held-out protocol),
-    only the first (1 - test_fraction) of messages are included.  The last
-    test_fraction is reserved exclusively for run_eval via
-    load_labeled_messages(..., split="test") and is never exposed here.
+    val_protocols      — these protocols go entirely to val_groups.
+                         Defaults to VAL_TIER2_PROTOCOLS.
+    test_fraction      — fraction of val_protocol messages reserved for
+                         run_eval (never exposed here). Only applies to
+                         val_protocols, not to train protocols.
+    train_val_fraction — fraction of each TRAIN protocol's 200-msg chunks
+                         that are moved to val_groups (e.g. 0.10 = 10%).
+                         Use this with dynamic val splits so the val set
+                         also contains samples from the training families.
     """
     val_protocols     = set(val_protocols or VAL_TIER2_PROTOCOLS)
     exclude_protocols = set(exclude_protocols or [])
@@ -139,56 +177,31 @@ def load_tier2_groups(
 
         if name in val_protocols:
             # Reserve last test_fraction for held-out test evaluation
-            n_val = max(1, int(len(msgs) * (1.0 - test_fraction)))
-            msgs = msgs[:n_val]
-
-        chunk_size = 200
-        for i in range(0, len(msgs), chunk_size):
-            chunk = msgs[i: i + chunk_size]
-            if not chunk:
-                continue
-            grp = FormatGroup(format_id=f"{name}_{i//chunk_size:04d}", messages=chunk)
-            if name in val_protocols:
-                val_groups.append(grp)
+            n_keep = max(1, int(len(msgs) * (1.0 - test_fraction)))
+            msgs = msgs[:n_keep]
+            chunk_size = 200
+            for i in range(0, len(msgs), chunk_size):
+                chunk = msgs[i: i + chunk_size]
+                if chunk:
+                    val_groups.append(FormatGroup(
+                        format_id=f"{name}_{i//chunk_size:04d}", messages=chunk))
+        else:
+            # Training protocol: optionally split last train_val_fraction chunks to val
+            chunk_size = 200
+            all_chunks: list[FormatGroup] = []
+            for i in range(0, len(msgs), chunk_size):
+                chunk = msgs[i: i + chunk_size]
+                if chunk:
+                    all_chunks.append(FormatGroup(
+                        format_id=f"{name}_{i//chunk_size:04d}", messages=chunk))
+            if train_val_fraction > 0 and all_chunks:
+                n_val_chunks = max(1, round(len(all_chunks) * train_val_fraction))
+                train_groups.extend(all_chunks[:-n_val_chunks])
+                val_groups.extend(all_chunks[-n_val_chunks:])
             else:
-                train_groups.append(grp)
+                train_groups.extend(all_chunks)
 
     return train_groups, val_groups
-
-
-def load_tier3_groups(
-    tier3_dir:         Path,
-    exclude_protocols: list[str] | None = None,
-) -> list[FormatGroup]:
-    """
-    Load all Tier-3 labeled BI benchmark groups for training.
-
-    All messages go to training — no val/test split is applied here because
-    the held-out protocol is excluded entirely via exclude_protocols, and
-    evaluation of the held-out protocol uses eval_harness ground truth
-    rather than these saved labels.
-    """
-    exclude_protocols = set(exclude_protocols or [])
-    groups: list[FormatGroup] = []
-
-    for proto_dir in sorted(tier3_dir.iterdir()):
-        name = proto_dir.name
-        if name in exclude_protocols:
-            continue
-        path = proto_dir / "messages.jsonl"
-        if not path.exists():
-            continue
-        msgs = _load_jsonl(path)
-        chunk_size = 200
-        for i in range(0, len(msgs), chunk_size):
-            chunk = msgs[i: i + chunk_size]
-            if chunk:
-                groups.append(FormatGroup(
-                    format_id=f"{name}_{i//chunk_size:04d}",
-                    messages=chunk,
-                ))
-
-    return groups
 
 
 # ── Format-batched dataset ────────────────────────────────────────────────────
