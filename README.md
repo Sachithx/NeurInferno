@@ -23,28 +23,19 @@ A CUDA GPU is required for training.
 
 ## Checkpoints
 
-Weights are not in git (~400 MB). Pack them locally, upload **one** archive,
-then reviewers download it:
+Weights are not in git (~400 MB). They are in a shared Drive folder
+([link](https://drive.google.com/drive/folders/1AR5maHr_DzH8yXj1jcKAJ-8z8lYk38nD?usp=sharing);
+set sharing to **anyone with the link**):
 
 ```bash
-bash pack_checkpoints.sh          # writes neurinferno_seed789_ckpts.tar.gz
-# upload that file to Zenodo (best for NDSS) or an anonymous GitHub Release
-# paste the public URL into download_checkpoints.sh as CKPT_URL=...
 bash download_checkpoints.sh
 CUDA_VISIBLE_DEVICES=0 bash eval.sh
 ```
 
-Do not commit `.ckpt` files. GitHub git rejects or struggles with this much
-binary data; a Zenodo record or GitHub **Release** asset does not.
+If `checkpoints/seed789/` is already on disk, skip the download and run
+`bash eval.sh` only.
 
 ## Run
-
-Evaluate the shipped weights (writes `results/seed789/` and checks
-`results/reference/`):
-
-```bash
-CUDA_VISIBLE_DEVICES=0 bash eval.sh
-```
 
 Train from scratch, then evaluate. Existing weights under `checkpoints/seed789/`
 are skipped, so delete them first:

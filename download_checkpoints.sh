@@ -1,28 +1,50 @@
 #!/usr/bin/env bash
-# Download seed-789 eval weights into checkpoints/seed789/.
-#
-# After you upload neurinferno_seed789_ckpts.tar.gz (see pack_checkpoints.sh),
-# paste the public URL below, or pass it as CKPT_URL=... bash download_checkpoints.sh
+# Download seed-789 eval weights from the shared Drive folder into
+# checkpoints/seed789/.  Sharing must be "anyone with the link".
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-CKPT_URL="${CKPT_URL:-}"
+DRIVE_FOLDER="${DRIVE_FOLDER:-https://drive.google.com/drive/folders/1AR5maHr_DzH8yXj1jcKAJ-8z8lYk38nD}"
 
-if [[ -z "$CKPT_URL" ]]; then
-    echo "Checkpoint archive URL is not set."
-    echo "Upload neurinferno_seed789_ckpts.tar.gz (from pack_checkpoints.sh) to"
-    echo "Zenodo or an anonymous GitHub Release, then either:"
-    echo "  1. Put the URL in download_checkpoints.sh as CKPT_URL=..."
-    echo "  2. Or run:  CKPT_URL=https://... bash download_checkpoints.sh"
+if ! command -v gdown >/dev/null 2>&1; then
+    echo "Installing gdown ..."
+    pip install -q gdown
+fi
+
+tmp="$(mktemp -d /tmp/neurinferno_ckpts.XXXXXX)"
+cleanup() { rm -rf "$tmp"; }
+trap cleanup EXIT
+
+echo "Downloading ${DRIVE_FOLDER}"
+gdown --folder "$DRIVE_FOLDER" -O "$tmp" --remaining-ok
+
+# Accept any of:
+#   .../checkpoints/seed789/{lopo,l4po}
+#   .../seed789/{lopo,l4po}
+#   .../{lopo,l4po}
+src=""
+if [[ -d "$tmp/checkpoints/seed789/lopo" ]]; then
+    src="$tmp/checkpoints/seed789"
+elif [[ -d "$tmp/seed789/lopo" ]]; then
+    src="$tmp/seed789"
+else
+    src="$(find "$tmp" -type d -name lopo -print -quit 2>/dev/null || true)"
+    if [[ -n "$src" ]]; then
+        src="$(dirname "$src")"
+    fi
+fi
+
+if [[ -z "$src" || ! -d "$src/lopo" ]]; then
+    echo "Download succeeded but the folder layout was unexpected."
+    echo "Expected lopo/ and l4po/ under checkpoints/seed789/."
+    find "$tmp" -maxdepth 4 -type d | head -40
     exit 1
 fi
 
-tmp="$(mktemp /tmp/neurinferno_ckpts.XXXXXX.tar.gz)"
-echo "Downloading ${CKPT_URL}"
-curl -L --fail "$CKPT_URL" -o "$tmp"
 mkdir -p checkpoints
-tar -xzf "$tmp" -C .
-rm -f "$tmp"
+rm -rf checkpoints/seed789
+mkdir -p checkpoints/seed789
+cp -a "$src/." checkpoints/seed789/
 echo "Weights are in checkpoints/seed789/"
 echo "Next: CUDA_VISIBLE_DEVICES=0 bash eval.sh"

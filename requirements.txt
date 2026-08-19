@@ -2,3 +2,4 @@ torch>=2.1
 pytorch-lightning>=2.1
 einops>=0.7
 numpy>=1.24
+gdown>=5.0
