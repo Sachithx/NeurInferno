@@ -20,8 +20,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler, DataLoader
 
-from src.model.encoder import PAD_IDX
-from src.data_generation.label_format import FIELD_TYPE_IDS
+from neurinferno.model.encoder import PAD_IDX
+from neurinferno.data_generation.label_format import FIELD_TYPE_IDS
 
 _UNK = FIELD_TYPE_IDS["UNKNOWN"]
 

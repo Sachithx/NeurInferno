@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.data_generation.label_format import FIELD_TYPES
+from neurinferno.data_generation.label_format import FIELD_TYPES
 
 N_FIELD_TYPES = len(FIELD_TYPES)  # 17
 

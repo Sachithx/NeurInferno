@@ -13,7 +13,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
-export PYTHONPATH="${PYTHONPATH:-.}"
+export PYTHONPATH="${PYTHONPATH:-src}"
 
 ENC_D=128; ENC_H=4; ENC_FF=512;  ENC_L=4
 LM_D=64;   LM_H=4;  LM_FF=256;   LM_L=2
@@ -90,7 +90,7 @@ for PROTO in "${LOPO_PROTOCOLS[@]}"; do
 
     if [[ -z "$LM_CKPT" ]]; then
         echo "  [Stage 1] Training ByteLM (excl=${PROTO}, seed=${SEED}) ..."
-        python -m src.training.train_lm \
+        python -m neurinferno.training.train_lm \
             --tier1_dir        "$TIER1" \
             --tier2_dir        "$TIER2" \
             --ckpt_dir         "$CKPT_ROOT" \
@@ -106,7 +106,7 @@ for PROTO in "${LOPO_PROTOCOLS[@]}"; do
     fi
 
     echo "  [Stage 2+3] Training main + LOPO fine-tune (excl=${PROTO}, seed=${SEED}) ..."
-    python -m src.training.train_lopo \
+    python -m neurinferno.training.train_lopo \
         --lm_ckpt          "$LM_CKPT" \
         --protocol         "$PROTO" \
         --tier1_dir        "$TIER1" \
@@ -152,7 +152,7 @@ for SPLIT_STR in "${L4PO_SPLITS[@]}"; do
 
     if [[ -z "$LM_CKPT" ]]; then
         echo "  [Stage 1] Training ByteLM (excl=${HELD_OUT[*]}, seed=${SEED}) ..."
-        python -m src.training.train_lm \
+        python -m neurinferno.training.train_lm \
             --tier1_dir         "$TIER1" \
             --tier2_dir         "$TIER2" \
             --ckpt_dir          "$CKPT_ROOT" \
@@ -168,7 +168,7 @@ for SPLIT_STR in "${L4PO_SPLITS[@]}"; do
     fi
 
     echo "  [Stage 2+3] Training main + L4PO fine-tune (seed=${SEED}) ..."
-    python -m src.training.train_l4po \
+    python -m neurinferno.training.train_l4po \
         --lm_ckpt          "$LM_CKPT" \
         --held_out         "${HELD_OUT[@]}" \
         --tier1_dir        "$TIER1" \
@@ -195,7 +195,7 @@ done
 
 echo ""
 echo "========== EVALUATION  seed=${SEED} =========="
-python -m src.evaluation.run_eval \
+python -m neurinferno.evaluation.run_eval \
     --ckpt_root   "$CKPT_ROOT" \
     --tier2_dir   "$TIER2" \
     --results_dir "$RESULTS_DIR" \
@@ -203,7 +203,7 @@ python -m src.evaluation.run_eval \
     --max_msgs    "$MAX_MSGS"
 
 if [[ -d results/reference ]]; then
-    python -m src.evaluation.compare_results \
+    python -m neurinferno.evaluation.compare_results \
         --got "$RESULTS_DIR" \
         --ref results/reference
 else

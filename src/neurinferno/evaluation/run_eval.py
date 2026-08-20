@@ -7,7 +7,7 @@ Scans checkpoint directories and evaluates all found checkpoints:
                                                →  results/seed789/l4po/l4po_aggregate.csv
 
 Usage:
-    python -m src.evaluation.run_eval \
+    python -m neurinferno.evaluation.run_eval \
         --ckpt_root   checkpoints/seed789 \
         --tier2_dir   data/protocols \
         --results_dir results/seed789 \
@@ -24,11 +24,11 @@ from pathlib import Path
 
 import numpy as np
 
-from src.training.dataset import LOPO_PROTOCOLS
-from src.training.train_main import FieldInferenceModule
-from src.evaluation.lopo import run_lopo_evaluation, run_model_inference, _find_best_ckpt
-from src.evaluation.ground_truth import load_labeled_messages
-from src.evaluation.metrics import (
+from neurinferno.training.dataset import LOPO_PROTOCOLS
+from neurinferno.training.train_main import FieldInferenceModule
+from neurinferno.evaluation.lopo import run_lopo_evaluation, run_model_inference, _find_best_ckpt
+from neurinferno.evaluation.ground_truth import load_labeled_messages
+from neurinferno.evaluation.metrics import (
     BoundaryMetrics, compute_boundary_metrics, aggregate_metrics,
 )
 
@@ -343,7 +343,7 @@ def eval_l4po(
     print("\n" + "=" * 60)
     print("L4PO AGGREGATE")
     print("=" * 60)
-    from src.evaluation.aggregate_l4po import (
+    from neurinferno.evaluation.aggregate_l4po import (
         load_seed_results, aggregate, print_table, write_summary_csv,
     )
     records = load_seed_results(results_dir)

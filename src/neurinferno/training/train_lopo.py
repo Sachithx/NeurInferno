@@ -10,7 +10,7 @@ Legacy / leaky (pass --main_ckpt): fine-tuning starts from a shared Stage-2
 checkpoint trained on all protocols.
 
 Usage:
-    python -m src.training.train_lopo \
+    python -m neurinferno.training.train_lopo \
         --lm_ckpt   checkpoints/lm/<proto>/bylm-....ckpt \
         --protocol  dns \
         --tier1_dir data/grammar \
@@ -28,12 +28,12 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
 from pytorch_lightning.loggers import CSVLogger
 
-from src.training.dataset import (
+from neurinferno.training.dataset import (
     load_tier1_groups, load_tier2_groups,
     split_tier2_protocols,
     make_format_dataloader, LOPO_PROTOCOLS,
 )
-from src.training.train_main import FieldInferenceModule, train_main
+from neurinferno.training.train_main import FieldInferenceModule, train_main
 
 
 # ── Per-protocol Stage-2 helper ───────────────────────────────────────────────

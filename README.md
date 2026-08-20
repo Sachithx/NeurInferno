@@ -1,47 +1,91 @@
 # NeurInferno
 
-NeurInferno infers field boundaries in unlabeled binary protocol messages.
+NeurInferno infers **field boundaries** in unlabeled binary protocol messages.
 A byte-level transformer reads a batch of messages from the same format and
 injects cross-message statistics (mean / max / variance at each offset) after
 every layer. A frozen byte language model supplies per-byte entropy features.
-The training objective is per-gap boundary prediction plus a per-byte field-type
-auxiliary loss.
 
-Training is leakage-free leave-one-protocol-out (LOPO) and leave-four-protocol-out
-(L4PO): the held-out protocol is excluded from the language model, the main
-model, and the fine-tune. Grammar data in `data/grammar/` is synthetic
-pretraining; `data/protocols/` holds the twelve labeled protocol traces.
+The evaluated output is **per-gap cuts**, not field names.
 
-## Setup
+- **Demo:** [Hugging Face Space](https://huggingface.co/spaces/sachithabey/neurinferno)
+- **Weights:** [sachithabey/neurinferno](https://huggingface.co/sachithabey/neurinferno)
+- **Data:** [sachithabey/neurinferno](https://huggingface.co/datasets/sachithabey/neurinferno) (dataset tab)
+
+## Install
+
+```bash
+pip install -e ".[train]"    # this repo, with training extras
+```
+
+From GitHub (inference only: torch, einops, huggingface_hub):
+
+```bash
+pip install "neurinferno @ git+https://github.com/Sachithx/NeurInferno.git"
+```
+
+Python 3.10+. Inference runs on CPU. Training needs a CUDA GPU.
+
+## Inference (load weights from Hugging Face)
+
+The model needs **several messages of the same format**. One packet is the
+wrong input.
+
+```python
+from neurinferno import FieldBoundaryModel
+
+model = FieldBoundaryModel.from_pretrained()  # downloads ~15 MB once
+hex_lines = [
+    "0001080006040001900c2d9bfa4649e7160700000000000043f03612",
+    "0001080006040002fbccad5c9fb1d014735252376fd2446375217d01",
+    # ... more messages of the same format
+]
+for result in model.infer(hex_lines, threshold=0.75):
+    for seg in result.segments:
+        print(f"[{seg.start}:{seg.end}] {seg.hex}")
+```
+
+Local checkpoint:
+
+```python
+model = FieldBoundaryModel.from_checkpoint("path/to/model.ckpt")
+```
+
+CLI:
+
+```bash
+neurinferno infer messages.hex --threshold 0.75
+```
+
+See `examples/infer_hex.py`.
+
+## Data
+
+```bash
+huggingface-cli download sachithabey/neurinferno --repo-type dataset --local-dir data
+```
+
+That writes `data/protocols/` (12 labeled traces) and `data/grammar/`
+(500 synthetic formats). Training and eval expect this layout.
+
+## Train / eval (from a clone)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Python 3.10+ and a CUDA GPU are required.
-
-## Checkpoints
-
-Weights are not in git (~400 MB). Download them, then evaluate:
-
-```bash
-bash download_checkpoints.sh
+pip install -e ".[train]"
+huggingface-cli download sachithabey/neurinferno --repo-type dataset --local-dir data
+bash download_checkpoints.sh          # optional: all LOPO/L4PO folds
 CUDA_VISIBLE_DEVICES=0 bash eval.sh
 ```
 
-If `checkpoints/seed789/` is already on disk, skip the download and run
-`bash eval.sh` only. Eval writes CSVs under `results/seed789/`.
-
-## Run
-
-Train from scratch, then evaluate. Existing weights under `checkpoints/seed789/`
-are skipped, so delete them first:
+Train from scratch (skips folds that already have a checkpoint):
 
 ```bash
 rm -rf checkpoints/seed789
 CUDA_VISIBLE_DEVICES=0 bash train.sh
 ```
+
+LOPO and L4PO are leakage-free: the held-out protocol is excluded from the
+language model, the main model, and the fine-tune.
 
 ## Custom data
 
@@ -51,8 +95,8 @@ Each line is a JSON object:
 ```json
 {
   "bytes_hex": "0001080006040001...",
-  "field_type_per_byte": [2, 2, 2, 2, 1, 1, ...],
-  "boundary_per_gap": [0, 1, 0, 1, 1, 1, ...],
+  "field_type_per_byte": [2, 2, 2, 2, 1, 1],
+  "boundary_per_gap": [0, 1, 0, 1, 1],
   "format_id": "myproto_00000",
   "endianness": "big"
 }
@@ -60,36 +104,28 @@ Each line is a JSON object:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `bytes_hex` | yes | Message bytes as a lowercase hex string (even length). |
-| `boundary_per_gap` | yes | Length `n_bytes - 1`. `1` = field boundary after that byte, `0` = same field. This is the evaluation label. |
-| `field_type_per_byte` | yes | Length `n_bytes`. Integer type ids (see below). Used as an auxiliary training target. |
-| `format_id` | yes | Format name. Lines whose id ends with `_corrupted` are dropped at eval. |
+| `bytes_hex` | yes | Message bytes as lowercase hex (even length). |
+| `boundary_per_gap` | yes | Length `n_bytes - 1`. `1` = field boundary after that byte. This is the evaluation label. |
+| `field_type_per_byte` | yes | Length `n_bytes`. Auxiliary training target (type ids below). |
+| `format_id` | yes | Lines whose id ends with `_corrupted` are dropped at eval. |
 | `endianness` | no | `"big"` or `"little"`. |
 
 Type ids: `0` UNKNOWN, `1` LENGTH, `2` TYPE_TAG, `3` QUANTITY, `4` TIMESTAMP,
 `5` ADDRESS, `6` PORT, `7` FLAGS, `8` CHECKSUM, `9` COUNTER, `10` ASCII,
 `11` ENUM, `12` FLOAT, `13` INTEGER, `14` OPAQUE, `15` PADDING, `16` RESERVED.
-Use `0` when the type is unknown; `14` for unstructured payload.
 
-The last 20% of lines in each protocol file is held out as the test set (by
-file order, before dropping corrupted lines). Put train messages first, test
-messages last.
+The last 20% of lines in each protocol file is the test split (by file order,
+before dropping corrupted lines).
 
-### Add a protocol for training
+### Add a protocol
 
-Create `data/protocols/<name>/messages.jsonl`. Any such folder is loaded as
-training data automatically (except the protocol held out in that LOPO/L4PO
-fold). Extra grammar formats go under `data/grammar/<name>/messages.jsonl`
-the same way.
+1. Create `data/protocols/<name>/messages.jsonl`.
+2. Append `<name>` to `LOPO_PROTOCOLS` in `src/neurinferno/training/dataset.py` and in `train.sh`.
+3. For L4PO, add `<name>` to one or more `L4PO_SPLITS` in `train.sh`.
+4. Retrain that fold: `rm -rf checkpoints/seed789/lopo/<name>` then `bash train.sh`.
 
-### Add a protocol to LOPO / L4PO eval
+Directory names must be unique and `[a-z0-9_]` only.
 
-1. Add `data/protocols/<name>/messages.jsonl` as above.
-2. Append `<name>` to `LOPO_PROTOCOLS` in `src/training/dataset.py`.
-3. Append `<name>` to `LOPO_PROTOCOLS` in `train.sh`.
-4. For L4PO, add `<name>` to one or more entries in `L4PO_SPLITS` in `train.sh`.
-5. Retrain that fold (`rm -rf checkpoints/seed789/lopo/<name>` then `bash train.sh`),
-   or eval if a matching checkpoint already exists.
+## License
 
-Directory names must be unique, contain no spaces, and should use only
-`[a-z0-9_]` so L4PO split labels stay parseable.
+Apache-2.0. See `LICENSE`.

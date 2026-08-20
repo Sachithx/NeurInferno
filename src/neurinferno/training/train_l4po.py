@@ -6,7 +6,7 @@ trains ONE model on the remaining protocols, then evaluates on each held-out
 protocol using its Tier-2 test split.
 
 Usage — random selection (seed fixes which 4 are held out, reproducible):
-    python -m src.training.train_l4po \
+    python -m neurinferno.training.train_l4po \
         --lm_ckpt   checkpoints/lm/bylm-epoch=00-val/loss=4.8214.ckpt \
         --tier1_dir data/grammar \
         --tier2_dir data/protocols \
@@ -16,7 +16,7 @@ Usage — random selection (seed fixes which 4 are held out, reproducible):
         --main_epochs 50 --max_steps 2000 --lr 1e-4 --n_msg 100
 
 Usage — explicit held-out set:
-    python -m src.training.train_l4po \
+    python -m neurinferno.training.train_l4po \
         --lm_ckpt   checkpoints/lm/<label>/bylm-....ckpt \
         --held_out  bgp_raw modbus tcp ip \
         --tier1_dir data/grammar \
@@ -35,12 +35,12 @@ from pathlib import Path
 import pytorch_lightning as pl
 import torch
 
-from src.training.dataset import LOPO_PROTOCOLS
-from src.training.train_lopo import _train_one_lopo
-from src.training.train_main import FieldInferenceModule
-from src.evaluation.ground_truth import load_labeled_messages
-from src.evaluation.lopo import run_model_inference
-from src.evaluation.metrics import compute_boundary_metrics, aggregate_metrics
+from neurinferno.training.dataset import LOPO_PROTOCOLS
+from neurinferno.training.train_lopo import _train_one_lopo
+from neurinferno.training.train_main import FieldInferenceModule
+from neurinferno.evaluation.ground_truth import load_labeled_messages
+from neurinferno.evaluation.lopo import run_model_inference
+from neurinferno.evaluation.metrics import compute_boundary_metrics, aggregate_metrics
 
 
 # ── Protocol selection ────────────────────────────────────────────────────────

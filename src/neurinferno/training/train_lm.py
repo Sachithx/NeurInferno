@@ -5,7 +5,7 @@ Train the auxiliary byte language model on all Tier 1 + Tier 2 data
 with standard next-byte cross-entropy loss.  ~10 epochs.
 
 Usage:
-    python -m src.training.train_lm \
+    python -m neurinferno.training.train_lm \
         --tier1_dir data/grammar \
         --tier2_dir data/protocols \
         --ckpt_dir  checkpoints \
@@ -25,9 +25,9 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping, LearningRateMonitor
 from pytorch_lightning.loggers import CSVLogger
 
-from src.model.byte_lm import ByteLM
-from src.model.encoder import PAD_IDX
-from src.training.dataset import (
+from neurinferno.model.byte_lm import ByteLM
+from neurinferno.model.encoder import PAD_IDX
+from neurinferno.training.dataset import (
     load_tier1_groups, load_tier2_groups, split_tier2_protocols,
     make_lm_dataloader,
 )

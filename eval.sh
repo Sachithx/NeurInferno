@@ -7,7 +7,7 @@
 
 set -euo pipefail
 cd "$(dirname "$0")"
-export PYTHONPATH="${PYTHONPATH:-.}"
+export PYTHONPATH="${PYTHONPATH:-src}"
 
 CKPT_ROOT="checkpoints/seed789"
 TIER2="data/protocols"
@@ -17,7 +17,7 @@ MAX_MSGS=1000
 
 if [[ $# -gt 0 ]]; then
     # allow --ckpt_root PATH and other run_eval flags
-    python -m src.evaluation.run_eval \
+    python -m neurinferno.evaluation.run_eval \
         --ckpt_root   "$CKPT_ROOT" \
         --tier2_dir   "$TIER2" \
         --results_dir "$RESULTS_DIR" \
@@ -25,7 +25,7 @@ if [[ $# -gt 0 ]]; then
         --max_msgs    "$MAX_MSGS" \
         "$@"
 else
-    python -m src.evaluation.run_eval \
+    python -m neurinferno.evaluation.run_eval \
         --ckpt_root   "$CKPT_ROOT" \
         --tier2_dir   "$TIER2" \
         --results_dir "$RESULTS_DIR" \
@@ -34,7 +34,7 @@ else
 fi
 
 if [[ -d results/reference ]]; then
-    python -m src.evaluation.compare_results \
+    python -m neurinferno.evaluation.compare_results \
         --got "$RESULTS_DIR" \
         --ref results/reference
 else

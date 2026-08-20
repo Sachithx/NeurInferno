@@ -18,14 +18,14 @@ from pathlib import Path
 import torch
 import numpy as np
 
-from src.training.dataset import LOPO_PROTOCOLS
-from src.training.train_main import FieldInferenceModule
-from src.evaluation.ground_truth import load_labeled_messages, LabeledMessage
-from src.evaluation.metrics import (
+from neurinferno.training.dataset import LOPO_PROTOCOLS
+from neurinferno.training.train_main import FieldInferenceModule
+from neurinferno.evaluation.ground_truth import load_labeled_messages, LabeledMessage
+from neurinferno.evaluation.metrics import (
     BoundaryMetrics, compute_boundary_metrics, aggregate_metrics,
     compute_pr_curve, auprc,
 )
-from src.model.encoder import PAD_IDX
+from neurinferno.model.encoder import PAD_IDX
 
 
 def _ckpt_step_and_loss(p: Path) -> tuple[int, float]:

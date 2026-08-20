@@ -6,13 +6,13 @@ Each batch contains N=64 messages from one format, enabling cross-message
 attention to learn inter-message correlations.
 
 Usage:
-    python -m src.training.train_main \
+    python -m neurinferno.training.train_main \
         --lm_ckpt checkpoints/lm/bylm-....ckpt \
         --ckpt_dir checkpoints \
         --epochs 50 --n_msgs 64 --lr 3e-4
 
 Or with fast_dev for CI / smoke testing:
-    python -m src.training.train_main --fast_dev
+    python -m neurinferno.training.train_main --fast_dev
 """
 
 from __future__ import annotations
@@ -27,14 +27,14 @@ from pytorch_lightning.callbacks import (
     ModelCheckpoint, EarlyStopping, LearningRateMonitor)
 from pytorch_lightning.loggers import CSVLogger
 
-from src.model.full_model import FullModel
-from src.model.byte_lm import ByteLM
-from src.training.dataset import (
+from neurinferno.model.full_model import FullModel
+from neurinferno.model.byte_lm import ByteLM
+from neurinferno.training.dataset import (
     load_tier1_groups, load_tier2_groups,
     make_format_dataloader,
 )
 
-from src.training.losses import compute_total_loss, LossWeights
+from neurinferno.training.losses import compute_total_loss, LossWeights
 
 
 class FieldInferenceModule(pl.LightningModule):
@@ -134,7 +134,7 @@ class FieldInferenceModule(pl.LightningModule):
         # Additional accuracy metric on non-PAD, non-UNKNOWN bytes
         if stage == "val":
             byte_mask = ~pad_mask
-            from src.data_generation.label_format import FIELD_TYPE_IDS
+            from neurinferno.data_generation.label_format import FIELD_TYPE_IDS
             valid = byte_mask & (ft_labels != FIELD_TYPE_IDS["UNKNOWN"])
             if valid.sum() > 0:
                 preds = out.field_logits.argmax(-1)

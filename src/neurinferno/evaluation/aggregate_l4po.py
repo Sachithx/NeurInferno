@@ -7,7 +7,7 @@ Reads all l4po_*.csv files from results_dir, computes:
   - Summary CSV + printed table
 
 Usage:
-    python -m src.evaluation.aggregate_l4po --results_dir results/l4po
+    python -m neurinferno.evaluation.aggregate_l4po --results_dir results/l4po
 """
 
 from __future__ import annotations

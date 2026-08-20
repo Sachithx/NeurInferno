@@ -24,9 +24,9 @@ from dataclasses import dataclass, field
 import torch
 import torch.nn as nn
 
-from src.model.encoder import ByteEncoder, PAD_IDX
-from src.model.byte_lm import ByteLM
-from src.model.heads import (FieldTypeHead, RelationalFieldTypeHead,
+from neurinferno.model.encoder import ByteEncoder, PAD_IDX
+from neurinferno.model.byte_lm import ByteLM
+from neurinferno.model.heads import (FieldTypeHead, RelationalFieldTypeHead,
                              BoundaryHead, BIOTaggingHead)
 
 

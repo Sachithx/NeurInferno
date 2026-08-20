@@ -225,3 +225,6 @@ results
 
 .DS_Store
 neurinferno_seed789_ckpts.tar.gz
+hf_space/weights/
+hf_space/.staging/
+hf_space/.dataset_staging/

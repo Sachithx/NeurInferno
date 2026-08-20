@@ -19,7 +19,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-from src.model.encoder import VOCAB, PAD_IDX
+from neurinferno.model.encoder import VOCAB, PAD_IDX
 
 
 _LM_DIM    = 64

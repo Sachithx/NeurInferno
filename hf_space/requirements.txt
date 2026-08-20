@@ -1,0 +1,7 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.1
+einops>=0.7
+numpy>=1.24
+gradio>=5.29
+huggingface_hub>=0.23
+audioop-lts; python_version>='3.13'

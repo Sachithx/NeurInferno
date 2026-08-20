@@ -12,7 +12,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from src.data_generation.label_format import FIELD_TYPE_IDS
+from neurinferno.data_generation.label_format import FIELD_TYPE_IDS
 
 _UNK = FIELD_TYPE_IDS["UNKNOWN"]
 
