@@ -1,1 +1,0 @@
-{"type": "format_star", "segments": [{"kind": "tlv", "t_width": 3, "l_width": 4}, {"kind": "qvbytes", "q_width": 1, "v_count": 2}, {"kind": "star_lv", "l_width": 4, "suffix": 4}]}

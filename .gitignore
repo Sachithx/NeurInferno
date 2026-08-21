@@ -223,6 +223,10 @@ checkpoints
 netzob_eval_results
 results
 
+# Full datasets are distributed through Hugging Face. Keep data/README.md.
+/data/grammar/
+/data/protocols/
+
 .DS_Store
 neurinferno_seed789_ckpts.tar.gz
 hf_space/weights/

@@ -32,7 +32,3 @@ All notable user-facing changes are documented here. This project follows
 
 - Initial package, command-line interface, model loading, training utilities,
   evaluation utilities, and CPU demo.
-
-[Unreleased]: https://github.com/Sachithx/NeurInferno/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/Sachithx/NeurInferno/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Sachithx/NeurInferno/releases/tag/v0.1.0

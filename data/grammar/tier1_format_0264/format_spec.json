@@ -1,1 +1,0 @@
-{"type": "format", "segments": [{"kind": "fixed", "width": 8, "personality": "integer"}, {"kind": "qvbytes", "q_width": 4, "v_count": 7}]}

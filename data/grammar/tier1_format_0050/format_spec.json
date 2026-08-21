@@ -1,1 +1,0 @@
-{"type": "format", "segments": [{"kind": "fixed", "width": 4, "personality": "float"}, {"kind": "fixed", "width": 3, "personality": "address"}, {"kind": "fixed", "width": 4, "personality": "float"}, {"kind": "tlv", "t_width": 3, "l_width": 4}]}
