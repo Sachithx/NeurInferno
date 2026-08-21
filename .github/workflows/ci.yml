@@ -67,4 +67,4 @@ jobs:
       - name: Install project and test dependencies
         run: python -m pip install -e ".[dev,demo]"
       - name: Measure coverage
-        run: pytest --cov=neurinferno.inference --cov=neurinferno.cli --cov-report=term-missing
+        run: pytest --cov=src/neurinferno --cov-report=term-missing

@@ -70,6 +70,12 @@ pythonpath = ["."]
 [tool.coverage.run]
 branch = true
 source = ["neurinferno"]
+omit = [
+  "src/neurinferno/data_generation/*",
+  "src/neurinferno/evaluation/*",
+  "src/neurinferno/model/*",
+  "src/neurinferno/training/*",
+]
 
 [tool.coverage.report]
 show_missing = true
