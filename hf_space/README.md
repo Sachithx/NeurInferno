@@ -10,18 +10,31 @@ app_file: app.py
 pinned: false
 license: apache-2.0
 short_description: Infer field boundaries in unlabeled binary protocol messages
+models:
+  - sachithabey/neurinferno
+datasets:
+  - sachithabey/neurinferno
 ---
 
 # NeurInferno
 
-Paste **several hex messages of the same format** (one per line). The model
-reads the batch together and uses cross-message statistics at each byte
-offset to predict **field boundaries** (cuts), not field names.
+NeurInferno proposes field boundaries in batches of unlabeled binary protocol
+messages. Paste several messages of the same format, one hexadecimal message
+per line, and inspect the boundary map, structured segments, confidence view,
+or JSON output.
 
-A single packet is the wrong input. Do not paste production traffic that
-contains secrets; inputs are processed in memory.
+## Input guidance
 
-This Space runs on **CPU**. Weights are the LOPO modbus hold-out checkpoint
-(~15 MB), trained on the other eleven protocols plus grammar data.
+- Use 4–32 messages from the same message format.
+- Each message may contain up to 512 processed bytes.
+- Whitespace, `0x`, colons, dashes, and underscores are accepted.
+- The output contains boundary predictions, not semantic field names.
+- Do not submit credentials, tokens, or sensitive production traffic.
 
-Examples: ARP and IGMP (use the buttons under the text box).
+This Space runs on CPU. The first request may take longer while the model is
+loaded. Example batches are available directly in the interface.
+
+- [Source](https://github.com/Sachithx/NeurInferno)
+- [Python package](https://pypi.org/project/neurinferno/)
+- [Model](https://huggingface.co/sachithabey/neurinferno)
+- [Dataset](https://huggingface.co/datasets/sachithabey/neurinferno)

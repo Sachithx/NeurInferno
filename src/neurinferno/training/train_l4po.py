@@ -35,20 +35,20 @@ from pathlib import Path
 import pytorch_lightning as pl
 import torch
 
+from neurinferno.evaluation.ground_truth import load_labeled_messages
+from neurinferno.evaluation.lopo import run_model_inference
+from neurinferno.evaluation.metrics import aggregate_metrics, compute_boundary_metrics
 from neurinferno.training.dataset import LOPO_PROTOCOLS
 from neurinferno.training.train_lopo import _train_one_lopo
 from neurinferno.training.train_main import FieldInferenceModule
-from neurinferno.evaluation.ground_truth import load_labeled_messages
-from neurinferno.evaluation.lopo import run_model_inference
-from neurinferno.evaluation.metrics import compute_boundary_metrics, aggregate_metrics
-
 
 # ── Protocol selection ────────────────────────────────────────────────────────
 
+
 def select_held_out(
     held_out: list[str] | None,
-    seed:     int | None,
-    n:        int = 4,
+    seed: int | None,
+    n: int = 4,
 ) -> list[str]:
     """Return the list of held-out Tier-2 protocol names.
 
@@ -59,8 +59,7 @@ def select_held_out(
         unknown = set(held_out) - set(LOPO_PROTOCOLS)
         if unknown:
             raise ValueError(
-                f"Unknown protocol(s): {unknown}.\n"
-                f"Must be from LOPO_PROTOCOLS: {LOPO_PROTOCOLS}"
+                f"Unknown protocol(s): {unknown}.\nMust be from LOPO_PROTOCOLS: {LOPO_PROTOCOLS}"
             )
         return list(held_out)
 
@@ -72,30 +71,31 @@ def select_held_out(
 
 # ── Training ──────────────────────────────────────────────────────────────────
 
+
 def train_l4po(
-    lm_ckpt:         str,
-    held_out:        list[str],
-    tier1_dir:       str   = "data/grammar",
-    tier2_dir:       str   = "data/protocols",
-    ckpt_dir:        str   = "checkpoints/l4po",
-    main_epochs:     int   = 50,
-    max_steps:       int   = 2_000,
-    n_msgs:          int   = 32,
-    max_len:         int   = 512,
-    lr:              float = 1e-4,
-    num_workers:     int   = 0,
-    fast_dev:        bool  = False,
-    d_model:         int   = 128,
-    n_heads:         int   = 4,
-    d_ff:            int   = 512,
-    n_layers:        int   = 4,
-    lm_d_model:      int   = 64,
-    lm_n_heads:      int   = 4,
-    lm_d_ff:         int   = 256,
-    lm_n_layers:     int   = 2,
-    use_dynamic_val: bool  = False,
-    n_val_protocols: int   = 3,
-    seed:            int   = 42,
+    lm_ckpt: str,
+    held_out: list[str],
+    tier1_dir: str = "data/grammar",
+    tier2_dir: str = "data/protocols",
+    ckpt_dir: str = "checkpoints/l4po",
+    main_epochs: int = 50,
+    max_steps: int = 2_000,
+    n_msgs: int = 32,
+    max_len: int = 512,
+    lr: float = 1e-4,
+    num_workers: int = 0,
+    fast_dev: bool = False,
+    d_model: int = 128,
+    n_heads: int = 4,
+    d_ff: int = 512,
+    n_layers: int = 4,
+    lm_d_model: int = 64,
+    lm_n_heads: int = 4,
+    lm_d_ff: int = 256,
+    lm_n_layers: int = 2,
+    use_dynamic_val: bool = False,
+    n_val_protocols: int = 3,
+    seed: int = 42,
 ) -> Path:
     """
     Train one model on all LOPO protocols except held_out.
@@ -104,7 +104,7 @@ def train_l4po(
     pl.seed_everything(seed, workers=True)
     run_label = "_".join(sorted(held_out))
 
-    print(f"\n=== L4PO training ===")
+    print("\n=== L4PO training ===")
     print(f"  held-out  : {held_out}")
     print(f"  run label : {run_label}")
 
@@ -122,9 +122,14 @@ def train_l4po(
         num_workers=num_workers,
         fast_dev=fast_dev,
         tier2_exclude=held_out,
-        d_model=d_model, n_heads=n_heads, d_ff=d_ff, n_layers=n_layers,
-        lm_d_model=lm_d_model, lm_n_heads=lm_n_heads,
-        lm_d_ff=lm_d_ff, lm_n_layers=lm_n_layers,
+        d_model=d_model,
+        n_heads=n_heads,
+        d_ff=d_ff,
+        n_layers=n_layers,
+        lm_d_model=lm_d_model,
+        lm_n_heads=lm_n_heads,
+        lm_d_ff=lm_d_ff,
+        lm_n_layers=lm_n_layers,
         use_dynamic_val=use_dynamic_val,
         n_val_protocols=n_val_protocols,
     )
@@ -134,18 +139,19 @@ def train_l4po(
 
 # ── Evaluation ────────────────────────────────────────────────────────────────
 
+
 def eval_l4po(
-    ckpt_path:    Path,
-    held_out:     list[str],
-    tier2_dir:    str   = "data/protocols",
-    results_dir:  str   = "results/l4po",
-    max_msgs:     int   = 1000,
-    n_msgs_batch: int   = 32,
-    max_len:      int   = 512,
-    threshold:    float = 0.5,
+    ckpt_path: Path,
+    held_out: list[str],
+    tier2_dir: str = "data/protocols",
+    results_dir: str = "results/l4po",
+    max_msgs: int = 1000,
+    n_msgs_batch: int = 32,
+    max_len: int = 512,
+    threshold: float = 0.5,
 ) -> dict[str, dict]:
     """Evaluate the L4PO checkpoint on each held-out Tier-2 protocol."""
-    tier2_dir   = Path(tier2_dir)
+    tier2_dir = Path(tier2_dir)
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -169,45 +175,46 @@ def eval_l4po(
         print(f"{len(msgs)} msgs", end="  ")
 
         scores_list, gt_list = run_model_inference(
-            model, msgs, n_msgs=n_msgs_batch, max_len=max_len, device=device,
+            model,
+            msgs,
+            n_msgs=n_msgs_batch,
+            max_len=max_len,
+            device=device,
         )
         per_msg = [
-            compute_boundary_metrics(
-                [1 if s >= threshold else 0 for s in sc], gt
-            )
-            for sc, gt in zip(scores_list, gt_list)
+            compute_boundary_metrics([1 if s >= threshold else 0 for s in sc], gt)
+            for sc, gt in zip(scores_list, gt_list, strict=True)
         ]
         agg = aggregate_metrics(per_msg)
         all_results[proto] = {
-            "precision":  agg.precision,
-            "recall":     agg.recall,
-            "fpr":        agg.fpr,
-            "f1":         agg.f1,
+            "precision": agg.precision,
+            "recall": agg.recall,
+            "fpr": agg.fpr,
+            "f1": agg.f1,
             "n_messages": len(msgs),
         }
-        print(f"P={agg.precision:.3f}  R={agg.recall:.3f}  "
-              f"FPR={agg.fpr:.3f}  F1={agg.f1:.3f}")
+        print(f"P={agg.precision:.3f}  R={agg.recall:.3f}  FPR={agg.fpr:.3f}  F1={agg.f1:.3f}")
 
     _write_results(all_results, held_out, results_dir, ckpt_path)
     return all_results
 
 
 def _write_results(
-    results:     dict[str, dict],
-    held_out:    list[str],
+    results: dict[str, dict],
+    held_out: list[str],
     results_dir: Path,
-    ckpt_path:   Path,
+    ckpt_path: Path,
 ) -> None:
     run_label = "_".join(sorted(held_out))
-    csv_path  = results_dir / f"l4po_{run_label}.csv"
+    csv_path = results_dir / f"l4po_{run_label}.csv"
 
     data_rows = [
         {
-            "protocol":   proto,
-            "precision":  f"{m['precision']:.4f}",
-            "recall":     f"{m['recall']:.4f}",
-            "fpr":        f"{m['fpr']:.4f}",
-            "f1":         f"{m['f1']:.4f}",
+            "protocol": proto,
+            "precision": f"{m['precision']:.4f}",
+            "recall": f"{m['recall']:.4f}",
+            "fpr": f"{m['fpr']:.4f}",
+            "f1": f"{m['f1']:.4f}",
             "n_messages": int(m["n_messages"]),
             "checkpoint": str(ckpt_path),
         }
@@ -216,20 +223,23 @@ def _write_results(
     rows = list(data_rows)
 
     if data_rows:
-        avgs = {k: sum(float(r[k]) for r in data_rows) / len(data_rows)
-                for k in ("precision", "recall", "fpr", "f1")}
-        rows.append({
-            "protocol":   f"AVERAGE ({len(data_rows)} protocols)",
-            "precision":  f"{avgs['precision']:.4f}",
-            "recall":     f"{avgs['recall']:.4f}",
-            "fpr":        f"{avgs['fpr']:.4f}",
-            "f1":         f"{avgs['f1']:.4f}",
-            "n_messages": sum(int(r["n_messages"]) for r in data_rows),
-            "checkpoint": "",
-        })
+        avgs = {
+            k: sum(float(r[k]) for r in data_rows) / len(data_rows)
+            for k in ("precision", "recall", "fpr", "f1")
+        }
+        rows.append(
+            {
+                "protocol": f"AVERAGE ({len(data_rows)} protocols)",
+                "precision": f"{avgs['precision']:.4f}",
+                "recall": f"{avgs['recall']:.4f}",
+                "fpr": f"{avgs['fpr']:.4f}",
+                "f1": f"{avgs['f1']:.4f}",
+                "n_messages": sum(int(r["n_messages"]) for r in data_rows),
+                "checkpoint": "",
+            }
+        )
 
-    fieldnames = ["protocol", "precision", "recall", "fpr", "f1",
-                  "n_messages", "checkpoint"]
+    fieldnames = ["protocol", "precision", "recall", "fpr", "f1", "n_messages", "checkpoint"]
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
@@ -239,8 +249,9 @@ def _write_results(
     print(f"\n{'Protocol':<14} {'P':>7} {'R':>7} {'FPR':>7} {'F1':>7}")
     print("-" * 44)
     for r in rows:
-        print(f"{r['protocol']:<14} {r['precision']:>7} {r['recall']:>7} "
-              f"{r['fpr']:>7} {r['f1']:>7}")
+        print(
+            f"{r['protocol']:<14} {r['precision']:>7} {r['recall']:>7} {r['fpr']:>7} {r['f1']:>7}"
+        )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -248,59 +259,80 @@ def _write_results(
 if __name__ == "__main__":
     p = argparse.ArgumentParser(
         description="Leave-N-Protocol-Out training + Tier-2 evaluation. "
-                    "Trains one model on remaining protocols, evaluates on held-out.",
+        "Trains one model on remaining protocols, evaluates on held-out.",
     )
     p.add_argument(
-        "--lm_ckpt", required=True, metavar="PATH",
+        "--lm_ckpt",
+        required=True,
+        metavar="PATH",
         help="Stage-1 LM checkpoint (leakage-free).",
     )
     held_group = p.add_mutually_exclusive_group()
     held_group.add_argument(
-        "--held_out", nargs="+", metavar="PROTO",
-        help=f"Explicit held-out Tier-2 protocol names. "
-             f"Choose from: {LOPO_PROTOCOLS}",
+        "--held_out",
+        nargs="+",
+        metavar="PROTO",
+        help=f"Explicit held-out Tier-2 protocol names. Choose from: {LOPO_PROTOCOLS}",
     )
     held_group.add_argument(
-        "--seed", type=int, default=42,
+        "--seed",
+        type=int,
+        default=42,
         help="Random seed for selecting n_held_out protocols (default: 42).",
     )
     p.add_argument(
-        "--n_held_out", type=int, default=4,
+        "--n_held_out",
+        type=int,
+        default=4,
         help="Number of protocols to hold out when using --seed (default: 4).",
     )
-    p.add_argument("--tier1_dir",    default="data/grammar")
-    p.add_argument("--tier2_dir",    default="data/protocols")
-    p.add_argument("--ckpt_dir",     default="checkpoints/l4po")
-    p.add_argument("--results_dir",  default="results/l4po")
-    p.add_argument("--main_epochs",  type=int,   default=50)
-    p.add_argument("--max_steps",    type=int,   default=2_000)
-    p.add_argument("--n_msg",        type=int,   default=32, dest="n_msgs")
-    p.add_argument("--max_len",      type=int,   default=512)
-    p.add_argument("--lr",           type=float, default=1e-4)
-    p.add_argument("--num_workers",  type=int,   default=0)
-    p.add_argument("--fast_dev",     action="store_true")
-    p.add_argument("--eval_only",    metavar="CKPT", default=None)
-    p.add_argument("--threshold",    type=float, default=0.5)
-    p.add_argument("--n_msgs_batch", type=int,   default=32)
-    p.add_argument("--max_msgs",     type=int,   default=1000)
-    p.add_argument("--d_model",      type=int, default=128)
-    p.add_argument("--n_heads",      type=int, default=4)
-    p.add_argument("--d_ff",         type=int, default=512)
-    p.add_argument("--n_layers",     type=int, default=4)
-    p.add_argument("--lm_d_model",        type=int, default=64)
-    p.add_argument("--lm_n_heads",        type=int, default=4)
-    p.add_argument("--lm_d_ff",           type=int, default=256)
-    p.add_argument("--lm_n_layers",       type=int, default=2)
-    p.add_argument("--use_dynamic_val",   action="store_true",
-                   help="Randomly split T2 into train/val instead of fixed coap/ospf.")
-    p.add_argument("--n_val_protocols",   type=int, default=3,
-                   help="T2 val protocols for L4PO (13 remain after 4 excluded → 3 val).")
+    p.add_argument("--tier1_dir", default="data/grammar")
+    p.add_argument("--tier2_dir", default="data/protocols")
+    p.add_argument("--ckpt_dir", default="checkpoints/l4po")
+    p.add_argument("--results_dir", default="results/l4po")
+    p.add_argument("--main_epochs", type=int, default=50)
+    p.add_argument("--max_steps", type=int, default=2_000)
+    p.add_argument("--n_msg", type=int, default=32, dest="n_msgs")
+    p.add_argument("--max_len", type=int, default=512)
+    p.add_argument("--lr", type=float, default=1e-4)
+    p.add_argument("--num_workers", type=int, default=0)
+    p.add_argument("--fast_dev", action="store_true")
+    p.add_argument("--eval_only", metavar="CKPT", default=None)
+    p.add_argument("--threshold", type=float, default=0.5)
+    p.add_argument("--n_msgs_batch", type=int, default=32)
+    p.add_argument("--max_msgs", type=int, default=1000)
+    p.add_argument("--d_model", type=int, default=128)
+    p.add_argument("--n_heads", type=int, default=4)
+    p.add_argument("--d_ff", type=int, default=512)
+    p.add_argument("--n_layers", type=int, default=4)
+    p.add_argument("--lm_d_model", type=int, default=64)
+    p.add_argument("--lm_n_heads", type=int, default=4)
+    p.add_argument("--lm_d_ff", type=int, default=256)
+    p.add_argument("--lm_n_layers", type=int, default=2)
+    p.add_argument(
+        "--use_dynamic_val",
+        action="store_true",
+        help="Randomly split T2 into train/val instead of fixed coap/ospf.",
+    )
+    p.add_argument(
+        "--n_val_protocols",
+        type=int,
+        default=3,
+        help="T2 val protocols for L4PO (13 remain after 4 excluded → 3 val).",
+    )
     p.add_argument("--use_relational_type_head", action="store_true")
-    p.add_argument("--use_focal_type",           action="store_true")
-    p.add_argument("--skip_eval", action="store_true",
-                   help="Skip evaluation after training (use run_eval.py instead).")
-    p.add_argument("--train_seed", type=int, default=42,
-                   help="Global random seed for training reproducibility.")
+    p.add_argument("--use_focal_type", action="store_true")
+    p.add_argument(
+        "--skip_eval",
+        action="store_true",
+        help="Skip evaluation after training (use run_eval.py instead).",
+    )
+    p.add_argument(
+        "--train_seed",
+        type=int,
+        default=42,
+        help="Global random seed for training reproducibility.",
+    )
     args = p.parse_args()
 
     held_out = select_held_out(args.held_out, args.seed, args.n_held_out)
@@ -321,10 +353,14 @@ if __name__ == "__main__":
             lr=args.lr,
             num_workers=args.num_workers,
             fast_dev=args.fast_dev,
-            d_model=args.d_model, n_heads=args.n_heads,
-            d_ff=args.d_ff, n_layers=args.n_layers,
-            lm_d_model=args.lm_d_model, lm_n_heads=args.lm_n_heads,
-            lm_d_ff=args.lm_d_ff, lm_n_layers=args.lm_n_layers,
+            d_model=args.d_model,
+            n_heads=args.n_heads,
+            d_ff=args.d_ff,
+            n_layers=args.n_layers,
+            lm_d_model=args.lm_d_model,
+            lm_n_heads=args.lm_n_heads,
+            lm_d_ff=args.lm_d_ff,
+            lm_n_layers=args.lm_n_layers,
             use_dynamic_val=args.use_dynamic_val,
             n_val_protocols=args.n_val_protocols,
             seed=args.train_seed,

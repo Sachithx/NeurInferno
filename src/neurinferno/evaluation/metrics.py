@@ -12,21 +12,22 @@ on the totals (micro over gaps, one score per protocol).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from dataclasses import dataclass
+
 import numpy as np
-from dataclasses import dataclass, field
-from typing import Sequence
 
 
 @dataclass
 class BoundaryMetrics:
-    precision:  float
-    recall:     float
-    fpr:        float
-    f1:         float
-    tp:         int
-    fp:         int
-    fn:         int
-    tn:         int
+    precision: float
+    recall: float
+    fpr: float
+    f1: float
+    tp: int
+    fp: int
+    fn: int
+    tn: int
 
     @property
     def negatives(self) -> int:
@@ -38,27 +39,33 @@ def _safe_div(a: float, b: float) -> float:
 
 
 def compute_boundary_metrics(
-    pred:  Sequence[int],   # binary per-gap predictions  (0/1)
-    truth: Sequence[int],   # binary per-gap ground truth (0/1)
+    pred: Sequence[int],  # binary per-gap predictions  (0/1)
+    truth: Sequence[int],  # binary per-gap ground truth (0/1)
 ) -> BoundaryMetrics:
     """Per-message boundary metrics."""
-    pred  = np.asarray(pred,  dtype=bool)
+    pred = np.asarray(pred, dtype=bool)
     truth = np.asarray(truth, dtype=bool)
     assert len(pred) == len(truth), f"length mismatch: {len(pred)} vs {len(truth)}"
 
-    tp = int(( pred &  truth).sum())
-    fp = int(( pred & ~truth).sum())
-    fn = int((~pred &  truth).sum())
+    tp = int((pred & truth).sum())
+    fp = int((pred & ~truth).sum())
+    fn = int((~pred & truth).sum())
     tn = int((~pred & ~truth).sum())
 
     precision = _safe_div(tp, tp + fp)
-    recall    = _safe_div(tp, tp + fn)
-    fpr       = _safe_div(fp, fp + tn)   # FP / negatives
-    f1        = _safe_div(2 * precision * recall, precision + recall)
+    recall = _safe_div(tp, tp + fn)
+    fpr = _safe_div(fp, fp + tn)  # FP / negatives
+    f1 = _safe_div(2 * precision * recall, precision + recall)
 
     return BoundaryMetrics(
-        precision=precision, recall=recall, fpr=fpr, f1=f1,
-        tp=tp, fp=fp, fn=fn, tn=tn,
+        precision=precision,
+        recall=recall,
+        fpr=fpr,
+        f1=f1,
+        tp=tp,
+        fp=fp,
+        fn=fn,
+        tn=tn,
     )
 
 
@@ -73,19 +80,25 @@ def aggregate_metrics(per_msg: list[BoundaryMetrics]) -> BoundaryMetrics:
     tn = sum(m.tn for m in per_msg)
 
     precision = _safe_div(tp, tp + fp)
-    recall    = _safe_div(tp, tp + fn)
-    fpr       = _safe_div(fp, fp + tn)
-    f1        = _safe_div(2 * precision * recall, precision + recall)
+    recall = _safe_div(tp, tp + fn)
+    fpr = _safe_div(fp, fp + tn)
+    f1 = _safe_div(2 * precision * recall, precision + recall)
 
     return BoundaryMetrics(
-        precision=precision, recall=recall, fpr=fpr, f1=f1,
-        tp=tp, fp=fp, fn=fn, tn=tn,
+        precision=precision,
+        recall=recall,
+        fpr=fpr,
+        f1=f1,
+        tp=tp,
+        fp=fp,
+        fn=fn,
+        tn=tn,
     )
 
 
 def compute_pr_curve(
     scores: Sequence[float],  # per-gap boundary score (e.g. sigmoid output)
-    truth:  Sequence[int],    # per-gap ground truth (0/1)
+    truth: Sequence[int],  # per-gap ground truth (0/1)
     n_thresholds: int = 100,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
@@ -93,15 +106,15 @@ def compute_pr_curve(
     Aggregated micro over all gaps from all messages (pass flattened).
     """
     scores = np.asarray(scores, dtype=float)
-    truth  = np.asarray(truth,  dtype=bool)
+    truth = np.asarray(truth, dtype=bool)
     thresholds = np.linspace(0.0, 1.0, n_thresholds)
     precisions = []
-    recalls    = []
+    recalls = []
     for t in thresholds:
         pred = scores >= t
-        tp = ( pred &  truth).sum()
-        fp = ( pred & ~truth).sum()
-        fn = (~pred &  truth).sum()
+        tp = (pred & truth).sum()
+        fp = (pred & ~truth).sum()
+        fn = (~pred & truth).sum()
         precisions.append(_safe_div(tp, tp + fp))
         recalls.append(_safe_div(tp, tp + fn))
     return np.array(precisions), np.array(recalls), thresholds

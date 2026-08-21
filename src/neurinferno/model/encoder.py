@@ -13,17 +13,15 @@ The cross-message statistics injection is the key inductive bias:
 
 from __future__ import annotations
 
-import math
 import torch
 import torch.nn as nn
 from einops import rearrange
-
 
 # ── Special token indices ────────────────────────────────────────────────────
 PAD_IDX = 256
 BOS_IDX = 257
 EOS_IDX = 258
-VOCAB    = 259  # 0-255 byte values + PAD + BOS + EOS
+VOCAB = 259  # 0-255 byte values + PAD + BOS + EOS
 
 
 class CrossMsgTransformerLayer(nn.Module):
@@ -36,27 +34,31 @@ class CrossMsgTransformerLayer(nn.Module):
       3. LN → FFN              → residual
     """
 
-    def __init__(self, d_model: int = 128, n_heads: int = 4,
-                 d_ff: int = 512, dropout: float = 0.1,
-                 disable_cross_msg: bool = False) -> None:
+    def __init__(
+        self,
+        d_model: int = 128,
+        n_heads: int = 4,
+        d_ff: int = 512,
+        dropout: float = 0.1,
+        disable_cross_msg: bool = False,
+    ) -> None:
         super().__init__()
         self.d_model = d_model
         self.disable_cross_msg = disable_cross_msg
 
         # — Self-attention —
-        self.norm1    = nn.LayerNorm(d_model)
-        self.self_attn = nn.MultiheadAttention(
-            d_model, n_heads, dropout=dropout, batch_first=True)
-        self.drop1    = nn.Dropout(dropout)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.self_attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.drop1 = nn.Dropout(dropout)
 
         # — Cross-message statistics injection —
-        self.norm2          = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
         self.cross_msg_proj = nn.Linear(d_model * 4, d_model)
-        self.drop2          = nn.Dropout(dropout)
+        self.drop2 = nn.Dropout(dropout)
 
         # — FFN —
         self.norm3 = nn.LayerNorm(d_model)
-        self.ffn   = nn.Sequential(
+        self.ffn = nn.Sequential(
             nn.Linear(d_model, d_ff),
             nn.GELU(),
             nn.Dropout(dropout),
@@ -66,8 +68,8 @@ class CrossMsgTransformerLayer(nn.Module):
 
     def forward(
         self,
-        h: torch.Tensor,                     # (B, N, L, D)
-        padding_mask: torch.Tensor | None,   # (B, N, L) bool, True=pad
+        h: torch.Tensor,  # (B, N, L, D)
+        padding_mask: torch.Tensor | None,  # (B, N, L) bool, True=pad
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return updated h and the cross-msg variance (for boundary features)."""
         B, N, L, D = h.shape
@@ -82,7 +84,9 @@ class CrossMsgTransformerLayer(nn.Module):
             attn_mask_flat = rearrange(padding_mask, "b n l -> (b n) l")
 
         attn_out, _ = self.self_attn(
-            h_flat, h_flat, h_flat,
+            h_flat,
+            h_flat,
+            h_flat,
             key_padding_mask=attn_mask_flat,
         )
         h = h + self.drop1(rearrange(attn_out, "(b n) l d -> b n l d", b=B, n=N))
@@ -99,13 +103,13 @@ class CrossMsgTransformerLayer(nn.Module):
             # Zero out padding positions before aggregating across messages
             if padding_mask is not None:
                 pad_mask_4d = padding_mask.unsqueeze(-1).float()  # (B, N, L, 1)
-                h_agg = h_norm * (1.0 - pad_mask_4d)             # zero padding
+                h_agg = h_norm * (1.0 - pad_mask_4d)  # zero padding
             else:
                 h_agg = h_norm
 
             mean_m = h_agg.mean(dim=1, keepdim=True).expand_as(h_norm)
-            max_m  = h_agg.max(dim=1,  keepdim=True).values.expand_as(h_norm)
-            var_m  = h_agg.var(dim=1,  unbiased=False, keepdim=True).expand_as(h_norm)
+            max_m = h_agg.max(dim=1, keepdim=True).values.expand_as(h_norm)
+            var_m = h_agg.var(dim=1, unbiased=False, keepdim=True).expand_as(h_norm)
             combined = torch.cat([h_norm, mean_m, max_m, var_m], dim=-1)  # (B,N,L,4D)
 
         h = h + self.drop2(self.cross_msg_proj(combined))
@@ -132,13 +136,13 @@ class ByteEncoder(nn.Module):
 
     def __init__(
         self,
-        d_model:           int   = 128,
-        n_heads:           int   = 4,
-        d_ff:              int   = 512,
-        n_layers:          int   = 4,
-        max_len:           int   = 512,
-        dropout:           float = 0.1,
-        disable_cross_msg: bool  = False,
+        d_model: int = 128,
+        n_heads: int = 4,
+        d_ff: int = 512,
+        n_layers: int = 4,
+        max_len: int = 512,
+        dropout: float = 0.1,
+        disable_cross_msg: bool = False,
     ) -> None:
         super().__init__()
         self.d_model = d_model
@@ -154,11 +158,14 @@ class ByteEncoder(nn.Module):
         self.embed_drop = nn.Dropout(dropout)
 
         # Transformer layers with cross-message injection
-        self.layers = nn.ModuleList([
-            CrossMsgTransformerLayer(d_model, n_heads, d_ff, dropout,
-                                     disable_cross_msg=disable_cross_msg)
-            for _ in range(n_layers)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                CrossMsgTransformerLayer(
+                    d_model, n_heads, d_ff, dropout, disable_cross_msg=disable_cross_msg
+                )
+                for _ in range(n_layers)
+            ]
+        )
 
         self.final_norm = nn.LayerNorm(d_model)
 
@@ -180,8 +187,8 @@ class ByteEncoder(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,                          # (B, N, L) long
-        padding_mask: torch.Tensor | None = None, # (B, N, L) bool
+        x: torch.Tensor,  # (B, N, L) long
+        padding_mask: torch.Tensor | None = None,  # (B, N, L) bool
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Returns
@@ -198,7 +205,7 @@ class ByteEncoder(nn.Module):
         # — Embeddings —
         pos_ids = torch.arange(L, device=x.device).unsqueeze(0)  # (1, L)
         # Expand to (B*N, L) for pos lookup, then reshape
-        tok_emb = self.embedding(x)          # (B, N, L, D)
+        tok_emb = self.embedding(x)  # (B, N, L, D)
         pos_emb = self.pos_embedding(pos_ids)  # (1, L, D) → broadcasts to (B,N,L,D)
         h = self.embed_drop(tok_emb + pos_emb)
 

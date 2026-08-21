@@ -1,131 +1,228 @@
+<div align="center">
+
 # NeurInferno
 
-NeurInferno infers **field boundaries** in unlabeled binary protocol messages.
-A byte-level transformer reads a batch of messages from the same format and
-injects cross-message statistics (mean / max / variance at each offset) after
-every layer. A frozen byte language model supplies per-byte entropy features.
+**Field-boundary inference for unlabeled binary protocol messages**
 
-The evaluated output is **per-gap cuts**, not field names.
+[![CI](https://github.com/Sachithx/NeurInferno/actions/workflows/ci.yml/badge.svg)](https://github.com/Sachithx/NeurInferno/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/neurinferno.svg)](https://pypi.org/project/neurinferno/)
+[![Python](https://img.shields.io/pypi/pyversions/neurinferno.svg)](https://pypi.org/project/neurinferno/)
+[![License](https://img.shields.io/github/license/Sachithx/NeurInferno.svg)](LICENSE)
+[![Hugging Face Space](https://img.shields.io/badge/Hugging%20Face-live%20demo-ff9d00.svg)](https://huggingface.co/spaces/sachithabey/neurinferno)
 
-- **Demo:** [Hugging Face Space](https://huggingface.co/spaces/sachithabey/neurinferno)
-- **Weights:** [sachithabey/neurinferno](https://huggingface.co/sachithabey/neurinferno)
-- **Data:** [sachithabey/neurinferno](https://huggingface.co/datasets/sachithabey/neurinferno) (dataset tab)
+[Live demo](https://huggingface.co/spaces/sachithabey/neurinferno)
+· [Model](https://huggingface.co/sachithabey/neurinferno)
+· [Dataset](https://huggingface.co/datasets/sachithabey/neurinferno)
+· [Report a bug](https://github.com/Sachithx/NeurInferno/issues/new/choose)
+
+</div>
+
+NeurInferno analyzes a batch of binary messages that share a format and
+predicts the byte gaps most likely to be field boundaries. It works without
+field labels at inference time and returns boundaries, confidence scores, and
+the corresponding byte segments.
+
+> [!IMPORTANT]
+> NeurInferno predicts structural boundaries, not field names or protocol
+> semantics. Review predictions before using them in downstream tooling.
 
 ## Install
 
 ```bash
-pip install -e ".[train]"    # this repo, with training extras
+python -m pip install neurinferno
 ```
 
-From GitHub (inference only: torch, einops, huggingface_hub):
+Python 3.10 or newer is required. Inference works on CPU; training requires a
+CUDA-capable environment.
 
-```bash
-pip install "neurinferno @ git+https://github.com/Sachithx/NeurInferno.git"
-```
-
-Python 3.10+. Inference runs on CPU. Training needs a CUDA GPU.
-
-## Inference (load weights from Hugging Face)
-
-The model needs **several messages of the same format**. One packet is the
-wrong input.
+## Quick start
 
 ```python
 from neurinferno import FieldBoundaryModel
 
-model = FieldBoundaryModel.from_pretrained()  # downloads ~15 MB once
-hex_lines = [
+messages = [
     "0001080006040001900c2d9bfa4649e7160700000000000043f03612",
     "0001080006040002fbccad5c9fb1d014735252376fd2446375217d01",
-    # ... more messages of the same format
+    "0001080006040002a388be2d1d684df0f31908ae1acad25b4dca7aa8",
+    "0001080006040001d41cd6668e87ac1e6d7b0000000000008593a2d9",
 ]
-for result in model.infer(hex_lines, threshold=0.75):
-    for seg in result.segments:
-        print(f"[{seg.start}:{seg.end}] {seg.hex}")
+
+model = FieldBoundaryModel.from_pretrained()
+for message_index, result in enumerate(model.infer(messages), start=1):
+    print(f"message {message_index}")
+    for segment in result.segments:
+        print(f"  [{segment.start}:{segment.end}] {segment.hex}")
 ```
 
-Local checkpoint:
+The first call to `from_pretrained()` downloads and caches the model artifact.
+For reliable cross-message statistics, provide at least four messages from the
+same format.
 
-```python
-model = FieldBoundaryModel.from_checkpoint("path/to/model.ckpt")
-```
+## Command line
 
-CLI:
+Place one hexadecimal message on each line of a file:
 
 ```bash
-neurinferno infer messages.hex --threshold 0.75
+neurinferno infer messages.hex
+neurinferno infer messages.hex --threshold 0.85
+neurinferno infer messages.hex --format json
 ```
 
-See `examples/infer_hex.py`.
+Standard input is supported when the path is omitted:
+
+```bash
+printf '0001aaff\n0002bbff\n' | neurinferno infer
+```
+
+Use a local checkpoint with `--ckpt path/to/model.ckpt`, or select another
+Hugging Face model repository with `--repo namespace/name`.
+
+## Input and output
+
+Inputs may use plain hex or common separators:
+
+```text
+0001080006040001
+0x00 0x01 0x08 0x00 0x06 0x04 0x00 0x02
+00:01:08:00:06:04:00:03
+```
+
+Unsupported characters, empty messages, invalid thresholds, and oversized
+batches produce explicit errors. Messages longer than the model context are
+marked as truncated in `MessageResult`.
+
+Each result contains:
+
+| Attribute | Meaning |
+|---|---|
+| `hex` | Hexadecimal bytes processed by the model. |
+| `n_bytes` | Number of processed bytes. |
+| `original_n_bytes` | Input length before context truncation. |
+| `truncated` | Whether the input exceeded the model context. |
+| `scores` | Boundary probability for every gap between adjacent bytes. |
+| `cuts` | Boolean decisions after applying the threshold. |
+| `segments` | Predicted fields with start offset, end offset, and hex. |
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Same-format messages] --> B[Byte encoder]
+    B --> C[Cross-message statistics]
+    D[Frozen byte language model] --> E[Entropy features]
+    C --> F[Boundary head]
+    E --> F
+    F --> G[Gap scores and segments]
+```
+
+A byte-level transformer processes the messages together. Cross-message mean,
+maximum, and variance features capture how bytes behave at the same offset,
+while a frozen byte language model supplies entropy features. The boundary head
+assigns a probability to each gap between consecutive bytes.
 
 ## Data
 
-```bash
-huggingface-cli download sachithabey/neurinferno --repo-type dataset --local-dir data
-```
-
-That writes `data/protocols/` (12 labeled traces) and `data/grammar/`
-(500 synthetic formats). Training and eval expect this layout.
-
-## Train / eval (from a clone)
+The full dataset is hosted separately from the Python package:
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[train]"
-huggingface-cli download sachithabey/neurinferno --repo-type dataset --local-dir data
-bash download_checkpoints.sh          # optional: all LOPO/L4PO folds
-CUDA_VISIBLE_DEVICES=0 bash eval.sh
+hf download sachithabey/neurinferno \
+  --repo-type dataset \
+  --local-dir data
 ```
 
-Train from scratch (skips folds that already have a checkpoint):
+This creates `data/protocols/` with labeled protocol traces and `data/grammar/`
+with synthetic formats.
 
-```bash
-rm -rf checkpoints/seed789
-CUDA_VISIBLE_DEVICES=0 bash train.sh
-```
-
-LOPO and L4PO are leakage-free: the held-out protocol is excluded from the
-language model, the main model, and the fine-tune.
-
-## Custom data
-
-Every protocol or grammar format is a directory containing one `messages.jsonl`.
-Each line is a JSON object:
+Each `messages.jsonl` line has this structure:
 
 ```json
 {
   "bytes_hex": "0001080006040001...",
   "field_type_per_byte": [2, 2, 2, 2, 1, 1],
   "boundary_per_gap": [0, 1, 0, 1, 1],
-  "format_id": "myproto_00000",
+  "format_id": "example_00000",
   "endianness": "big"
 }
 ```
 
 | Field | Required | Meaning |
 |---|---|---|
-| `bytes_hex` | yes | Message bytes as lowercase hex (even length). |
-| `boundary_per_gap` | yes | Length `n_bytes - 1`. `1` = field boundary after that byte. This is the evaluation label. |
-| `field_type_per_byte` | yes | Length `n_bytes`. Auxiliary training target (type ids below). |
-| `format_id` | yes | Lines whose id ends with `_corrupted` are dropped at eval. |
-| `endianness` | no | `"big"` or `"little"`. |
+| `bytes_hex` | Yes | Lowercase hexadecimal bytes with an even length. |
+| `boundary_per_gap` | Yes | Length `n_bytes - 1`; `1` marks a boundary after that byte. |
+| `field_type_per_byte` | Yes | Length `n_bytes`; auxiliary training type identifiers. |
+| `format_id` | Yes | Format identifier; identifiers ending in `_corrupted` are excluded from evaluation. |
+| `endianness` | No | `big` or `little`. |
 
-Type ids: `0` UNKNOWN, `1` LENGTH, `2` TYPE_TAG, `3` QUANTITY, `4` TIMESTAMP,
-`5` ADDRESS, `6` PORT, `7` FLAGS, `8` CHECKSUM, `9` COUNTER, `10` ASCII,
-`11` ENUM, `12` FLOAT, `13` INTEGER, `14` OPAQUE, `15` PADDING, `16` RESERVED.
+Field type identifiers are defined in
+[`label_format.py`](src/neurinferno/data_generation/label_format.py).
 
-The last 20% of lines in each protocol file is the test split (by file order,
-before dropping corrupted lines).
+## Training and evaluation
 
-### Add a protocol
+Clone the repository and install the training dependencies:
+
+```bash
+git clone https://github.com/Sachithx/NeurInferno.git
+cd NeurInferno
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[train]"
+hf download sachithabey/neurinferno --repo-type dataset --local-dir data
+```
+
+Run training or evaluate existing checkpoints:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash train.sh
+bash download_checkpoints.sh
+CUDA_VISIBLE_DEVICES=0 bash eval.sh
+```
+
+The training scripts skip folds that already have checkpoints. The configured
+LOPO and L4PO splits exclude held-out protocols from language-model training,
+main-model training, and fine-tuning.
+
+### Adding a protocol
 
 1. Create `data/protocols/<name>/messages.jsonl`.
-2. Append `<name>` to `LOPO_PROTOCOLS` in `src/neurinferno/training/dataset.py` and in `train.sh`.
-3. For L4PO, add `<name>` to one or more `L4PO_SPLITS` in `train.sh`.
-4. Retrain that fold: `rm -rf checkpoints/seed789/lopo/<name>` then `bash train.sh`.
+2. Add the name to `LOPO_PROTOCOLS` in
+   [`dataset.py`](src/neurinferno/training/dataset.py) and `train.sh`.
+3. Add it to the required L4PO split definitions in `train.sh`.
+4. Train the affected folds and run the evaluation suite.
 
-Directory names must be unique and `[a-z0-9_]` only.
+Directory names must be unique and contain only lowercase letters, numbers,
+and underscores.
+
+## Repository layout
+
+```text
+src/neurinferno/   Installable package and model implementation
+tests/             Unit and interface-helper tests
+examples/          Small runnable examples
+hf_space/          Hugging Face Space interface and deployment helper
+data/              Training and evaluation data layout
+train.sh           Reproducible training entry point
+eval.sh            Evaluation entry point
+```
+
+## Development
+
+```bash
+python -m pip install -e ".[dev,demo]"
+ruff check .
+ruff format --check .
+pytest
+python -m build
+twine check dist/*
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution expectations and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.
+
+## Project status
+
+NeurInferno is an alpha-stage research software project. Interfaces may evolve
+between minor releases. Pin a version when integrating it into another system.
 
 ## License
 
-Apache-2.0. See `LICENSE`.
+Licensed under Apache-2.0. See [LICENSE](LICENSE).

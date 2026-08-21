@@ -56,27 +56,26 @@ class RelationalFieldTypeHead(nn.Module):
 
     def __init__(self, d_model: int = 128) -> None:
         super().__init__()
-        feat_dim = 2 * d_model + 1          # h + cross_var + entropy scalar
+        feat_dim = 2 * d_model + 1  # h + cross_var + entropy scalar
         self.proj = nn.Linear(feat_dim, d_model)
         # BiGRU: each direction has d_model//2 hidden → concat = d_model out
-        self.gru  = nn.GRU(d_model, d_model // 2, num_layers=1,
-                           batch_first=True, bidirectional=True)
+        self.gru = nn.GRU(d_model, d_model // 2, num_layers=1, batch_first=True, bidirectional=True)
         self.head = nn.Linear(d_model, N_FIELD_TYPES)
 
     def forward(
         self,
-        h:         torch.Tensor,  # (B, N, L, D)
-        entropy:   torch.Tensor,  # (B, N, L)
+        h: torch.Tensor,  # (B, N, L, D)
+        entropy: torch.Tensor,  # (B, N, L)
         cross_var: torch.Tensor,  # (B, N, L, D)
-        pad_mask:  torch.Tensor,  # (B, N, L) bool  True=PAD
-    ) -> torch.Tensor:            # (B, N, L, 17)
+        pad_mask: torch.Tensor,  # (B, N, L) bool  True=PAD
+    ) -> torch.Tensor:  # (B, N, L, 17)
         B, N, L, D = h.shape
         feat = torch.cat([h, entropy.unsqueeze(-1), cross_var], dim=-1)  # (B,N,L,2D+1)
-        feat = F.gelu(self.proj(feat))                                    # (B,N,L,D)
+        feat = F.gelu(self.proj(feat))  # (B,N,L,D)
         # Zero padded positions so the backward GRU doesn't start from PAD content
         feat = feat.masked_fill(pad_mask.unsqueeze(-1), 0.0)
-        gru_out, _ = self.gru(feat.view(B * N, L, D))    # (B*N, L, D)
-        return self.head(gru_out.view(B, N, L, D))        # (B, N, L, 17)
+        gru_out, _ = self.gru(feat.view(B * N, L, D))  # (B*N, L, D)
+        return self.head(gru_out.view(B, N, L, D))  # (B, N, L, 17)
 
 
 class BoundaryHead(nn.Module):
@@ -109,23 +108,24 @@ class BoundaryHead(nn.Module):
 
     def boundary_features(
         self,
-        h:          torch.Tensor,  # (B, N, L, D)
-        entropy:    torch.Tensor,  # (B, N, L)
-        cross_var:  torch.Tensor,  # (B, N, L, D)
-    ) -> torch.Tensor:             # (B, N, L-1, 6D+1)
-        h_left  = h[..., :-1, :]
-        h_right = h[..., 1:,  :]
-        diff    = h_left - h_right
-        prod    = h_left * h_right
+        h: torch.Tensor,  # (B, N, L, D)
+        entropy: torch.Tensor,  # (B, N, L)
+        cross_var: torch.Tensor,  # (B, N, L, D)
+    ) -> torch.Tensor:  # (B, N, L-1, 6D+1)
+        h_left = h[..., :-1, :]
+        h_right = h[..., 1:, :]
+        diff = h_left - h_right
+        prod = h_left * h_right
 
         if self.disable_entropy:
-            ent_right = torch.zeros(*h.shape[:-2], h.shape[-2] - 1, 1,
-                                    device=h.device, dtype=h.dtype)
+            ent_right = torch.zeros(
+                *h.shape[:-2], h.shape[-2] - 1, 1, device=h.device, dtype=h.dtype
+            )
         else:
             ent_right = entropy[..., 1:].unsqueeze(-1)
 
-        var_left  = cross_var[..., :-1, :]
-        var_right = cross_var[..., 1:,  :]
+        var_left = cross_var[..., :-1, :]
+        var_right = cross_var[..., 1:, :]
 
         return torch.cat(
             [h_left, h_right, diff, prod, ent_right, var_left, var_right],
@@ -134,11 +134,11 @@ class BoundaryHead(nn.Module):
 
     def forward(
         self,
-        h:         torch.Tensor,  # (B, N, L, D)
-        entropy:   torch.Tensor,  # (B, N, L)
+        h: torch.Tensor,  # (B, N, L, D)
+        entropy: torch.Tensor,  # (B, N, L)
         cross_var: torch.Tensor,  # (B, N, L, D)
-    ) -> torch.Tensor:            # (B, N, L-1, 1)
-        feat   = self.boundary_features(h, entropy, cross_var)
+    ) -> torch.Tensor:  # (B, N, L-1, 1)
+        feat = self.boundary_features(h, entropy, cross_var)
         logits = self.net(feat)
         return logits
 

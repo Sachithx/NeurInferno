@@ -7,7 +7,6 @@ import csv
 import sys
 from pathlib import Path
 
-
 METRIC_KEYS_LOPO = ("P", "R", "FPR", "F1")
 METRIC_KEYS_L4PO = ("precision", "recall", "fpr", "f1")
 METRIC_KEYS_AGG = ("P_mean", "R_mean", "FPR_mean", "F1_mean")
@@ -47,8 +46,7 @@ def _compare_rows(
                 continue
             if not _close(got_by[proto][m], ref_by[proto][m]):
                 mismatches.append(
-                    f"{name}/{proto}/{m}: got {got_by[proto][m]}  "
-                    f"ref {ref_by[proto][m]}"
+                    f"{name}/{proto}/{m}: got {got_by[proto][m]}  ref {ref_by[proto][m]}"
                 )
     return mismatches
 
@@ -63,9 +61,15 @@ def compare(got_dir: Path, ref_dir: Path) -> int:
     lopo_got = got_dir / "lopo_results.csv"
     lopo_ref = ref_dir / "lopo_results.csv"
     if lopo_got.exists() and lopo_ref.exists():
-        mismatches.extend(_compare_rows(
-            "LOPO", _load(lopo_got), _load(lopo_ref), "protocol", METRIC_KEYS_LOPO,
-        ))
+        mismatches.extend(
+            _compare_rows(
+                "LOPO",
+                _load(lopo_got),
+                _load(lopo_ref),
+                "protocol",
+                METRIC_KEYS_LOPO,
+            )
+        )
     else:
         mismatches.append(f"missing LOPO csv (got={lopo_got.exists()} ref={lopo_ref.exists()})")
 
@@ -77,16 +81,28 @@ def compare(got_dir: Path, ref_dir: Path) -> int:
         if not got_p.exists():
             mismatches.append(f"missing {got_p}")
             continue
-        mismatches.extend(_compare_rows(
-            ref_p.stem, _load(got_p), _load(ref_p), "protocol", METRIC_KEYS_L4PO,
-        ))
+        mismatches.extend(
+            _compare_rows(
+                ref_p.stem,
+                _load(got_p),
+                _load(ref_p),
+                "protocol",
+                METRIC_KEYS_L4PO,
+            )
+        )
 
     agg_got = l4po_got / "l4po_aggregate.csv"
     agg_ref = l4po_ref / "l4po_aggregate.csv"
     if agg_got.exists() and agg_ref.exists():
-        mismatches.extend(_compare_rows(
-            "L4PO-agg", _load(agg_got), _load(agg_ref), "protocol", METRIC_KEYS_AGG,
-        ))
+        mismatches.extend(
+            _compare_rows(
+                "L4PO-agg",
+                _load(agg_got),
+                _load(agg_ref),
+                "protocol",
+                METRIC_KEYS_AGG,
+            )
+        )
 
     if mismatches:
         print(f"MISMATCH ({len(mismatches)}):")

@@ -37,15 +37,17 @@ def load_seed_results(results_dir: Path) -> list[dict]:
                 if row["protocol"].startswith("AVERAGE"):
                     continue
                 try:
-                    records.append({
-                        "seed_label": label,
-                        "protocol":   row["protocol"],
-                        "precision":  float(row["precision"]),
-                        "recall":     float(row["recall"]),
-                        "fpr":        float(row["fpr"]),
-                        "f1":         float(row["f1"]),
-                        "n_messages": int(row["n_messages"]),
-                    })
+                    records.append(
+                        {
+                            "seed_label": label,
+                            "protocol": row["protocol"],
+                            "precision": float(row["precision"]),
+                            "recall": float(row["recall"]),
+                            "fpr": float(row["fpr"]),
+                            "f1": float(row["f1"]),
+                            "n_messages": int(row["n_messages"]),
+                        }
+                    )
                 except (ValueError, KeyError):
                     continue
     return records
@@ -58,7 +60,7 @@ def aggregate(records: list[dict]) -> dict:
       overall   : {metric: (mean, std, n)}
     """
     per_proto: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
-    all_vals:  dict[str, list] = defaultdict(list)
+    all_vals: dict[str, list] = defaultdict(list)
 
     for r in records:
         p = r["protocol"]
@@ -67,14 +69,13 @@ def aggregate(records: list[dict]) -> dict:
             all_vals[metric].append(r[metric])
 
     def _stats(vals):
-        n    = len(vals)
+        n = len(vals)
         mean = sum(vals) / n if n else float("nan")
-        std  = (sum((v - mean) ** 2 for v in vals) / n) ** 0.5 if n > 1 else 0.0
+        std = (sum((v - mean) ** 2 for v in vals) / n) ** 0.5 if n > 1 else 0.0
         return mean, std, n
 
     per_proto_stats = {
-        p: {m: _stats(vals) for m, vals in metrics.items()}
-        for p, metrics in per_proto.items()
+        p: {m: _stats(vals) for m, vals in metrics.items()} for p, metrics in per_proto.items()
     }
     overall_stats = {m: _stats(vals) for m, vals in all_vals.items()}
     return per_proto_stats, overall_stats
@@ -82,43 +83,54 @@ def aggregate(records: list[dict]) -> dict:
 
 def write_summary_csv(
     per_proto_stats: dict,
-    overall_stats:   dict,
-    out_path:        Path,
+    overall_stats: dict,
+    out_path: Path,
 ) -> None:
-    fieldnames = ["protocol", "n_seeds",
-                  "P_mean", "P_std",
-                  "R_mean", "R_std",
-                  "FPR_mean", "FPR_std",
-                  "F1_mean", "F1_std"]
+    fieldnames = [
+        "protocol",
+        "n_seeds",
+        "P_mean",
+        "P_std",
+        "R_mean",
+        "R_std",
+        "FPR_mean",
+        "FPR_std",
+        "F1_mean",
+        "F1_std",
+    ]
     rows = []
     for proto in sorted(per_proto_stats):
         s = per_proto_stats[proto]
-        rows.append({
-            "protocol": proto,
-            "n_seeds":  s["f1"][2],
-            "P_mean":   f"{s['precision'][0]:.4f}",
-            "P_std":    f"{s['precision'][1]:.4f}",
-            "R_mean":   f"{s['recall'][0]:.4f}",
-            "R_std":    f"{s['recall'][1]:.4f}",
-            "FPR_mean": f"{s['fpr'][0]:.4f}",
-            "FPR_std":  f"{s['fpr'][1]:.4f}",
-            "F1_mean":  f"{s['f1'][0]:.4f}",
-            "F1_std":   f"{s['f1'][1]:.4f}",
-        })
+        rows.append(
+            {
+                "protocol": proto,
+                "n_seeds": s["f1"][2],
+                "P_mean": f"{s['precision'][0]:.4f}",
+                "P_std": f"{s['precision'][1]:.4f}",
+                "R_mean": f"{s['recall'][0]:.4f}",
+                "R_std": f"{s['recall'][1]:.4f}",
+                "FPR_mean": f"{s['fpr'][0]:.4f}",
+                "FPR_std": f"{s['fpr'][1]:.4f}",
+                "F1_mean": f"{s['f1'][0]:.4f}",
+                "F1_std": f"{s['f1'][1]:.4f}",
+            }
+        )
     # Overall row
     o = overall_stats
-    rows.append({
-        "protocol": "OVERALL",
-        "n_seeds":  o["f1"][2],
-        "P_mean":   f"{o['precision'][0]:.4f}",
-        "P_std":    f"{o['precision'][1]:.4f}",
-        "R_mean":   f"{o['recall'][0]:.4f}",
-        "R_std":    f"{o['recall'][1]:.4f}",
-        "FPR_mean": f"{o['fpr'][0]:.4f}",
-        "FPR_std":  f"{o['fpr'][1]:.4f}",
-        "F1_mean":  f"{o['f1'][0]:.4f}",
-        "F1_std":   f"{o['f1'][1]:.4f}",
-    })
+    rows.append(
+        {
+            "protocol": "OVERALL",
+            "n_seeds": o["f1"][2],
+            "P_mean": f"{o['precision'][0]:.4f}",
+            "P_std": f"{o['precision'][1]:.4f}",
+            "R_mean": f"{o['recall'][0]:.4f}",
+            "R_std": f"{o['recall'][1]:.4f}",
+            "FPR_mean": f"{o['fpr'][0]:.4f}",
+            "FPR_std": f"{o['fpr'][1]:.4f}",
+            "F1_mean": f"{o['f1'][0]:.4f}",
+            "F1_std": f"{o['f1'][1]:.4f}",
+        }
+    )
     with open(out_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
@@ -127,22 +139,31 @@ def write_summary_csv(
 
 
 def print_table(per_proto_stats: dict, overall_stats: dict) -> None:
-    print(f"\n{'Protocol':<12} {'Seeds':>5}  "
-          f"{'P':>13}  {'R':>13}  {'FPR':>13}  {'F1':>13}")
+    print(f"\n{'Protocol':<12} {'Seeds':>5}  {'P':>13}  {'R':>13}  {'FPR':>13}  {'F1':>13}")
     print("-" * 72)
     for proto in sorted(per_proto_stats):
-        s = per_proto_stats[proto]
-        n = s["f1"][2]
-        def fmt(m): return f"{s[m][0]:.3f}±{s[m][1]:.3f}"
-        print(f"{proto:<12} {n:>5}  "
-              f"{fmt('precision'):>13}  {fmt('recall'):>13}  "
-              f"{fmt('fpr'):>13}  {fmt('f1'):>13}")
+        stats = per_proto_stats[proto]
+        n = stats["f1"][2]
+        formatted = {
+            metric: f"{stats[metric][0]:.3f}±{stats[metric][1]:.3f}"
+            for metric in ("precision", "recall", "fpr", "f1")
+        }
+        print(
+            f"{proto:<12} {n:>5}  "
+            f"{formatted['precision']:>13}  {formatted['recall']:>13}  "
+            f"{formatted['fpr']:>13}  {formatted['f1']:>13}"
+        )
     print("-" * 72)
     o = overall_stats
-    def ofmt(m): return f"{o[m][0]:.3f}±{o[m][1]:.3f}"
-    print(f"{'OVERALL':<12} {o['f1'][2]:>5}  "
-          f"{ofmt('precision'):>13}  {ofmt('recall'):>13}  "
-          f"{ofmt('fpr'):>13}  {ofmt('f1'):>13}")
+
+    def ofmt(m):
+        return f"{o[m][0]:.3f}±{o[m][1]:.3f}"
+
+    print(
+        f"{'OVERALL':<12} {o['f1'][2]:>5}  "
+        f"{ofmt('precision'):>13}  {ofmt('recall'):>13}  "
+        f"{ofmt('fpr'):>13}  {ofmt('f1'):>13}"
+    )
 
 
 def print_seed_breakdown(records: list[dict]) -> None:
@@ -153,21 +174,23 @@ def print_seed_breakdown(records: list[dict]) -> None:
         if r["seed_label"] != current:
             current = r["seed_label"]
             print(f"  {current}")
-        print(f"    {'':31} {r['protocol']:<10} "
-              f"{r['precision']:6.3f} {r['recall']:6.3f} {r['f1']:6.3f}")
+        print(
+            f"    {'':31} {r['protocol']:<10} "
+            f"{r['precision']:6.3f} {r['recall']:6.3f} {r['f1']:6.3f}"
+        )
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--results_dir", default="results/l4po")
-    p.add_argument("--out_csv",     default=None,
-                   help="Output CSV path (default: results_dir/l4po_aggregate.csv)")
-    p.add_argument("--verbose",     action="store_true",
-                   help="Print per-seed breakdown")
+    p.add_argument(
+        "--out_csv", default=None, help="Output CSV path (default: results_dir/l4po_aggregate.csv)"
+    )
+    p.add_argument("--verbose", action="store_true", help="Print per-seed breakdown")
     args = p.parse_args()
 
     results_dir = Path(args.results_dir)
-    out_csv     = Path(args.out_csv) if args.out_csv else results_dir / "l4po_aggregate.csv"
+    out_csv = Path(args.out_csv) if args.out_csv else results_dir / "l4po_aggregate.csv"
 
     records = load_seed_results(results_dir)
     if not records:

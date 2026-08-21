@@ -36,26 +36,6 @@ def load_token() -> str:
     return token
 
 
-def copy_src(dest: Path) -> None:
-    src = ROOT / "src" / "neurinferno"
-    for rel in (
-        "__init__.py",
-        "inference.py",
-        "cli.py",
-        "model/__init__.py",
-        "model/encoder.py",
-        "model/byte_lm.py",
-        "model/heads.py",
-        "model/full_model.py",
-        "data_generation/__init__.py",
-        "data_generation/label_format.py",
-    ):
-        s = src / rel
-        d = dest / "neurinferno" / rel
-        d.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(s, d)
-
-
 def copy_ckpt(dest: Path) -> None:
     matches = sorted((ROOT / "checkpoints/seed789/lopo/modbus").rglob("*.ckpt"))
     if not matches:
@@ -80,7 +60,6 @@ def main() -> None:
     shutil.copy2(SPACE / "app.py", STAGING / "app.py")
     shutil.copy2(SPACE / "requirements.txt", STAGING / "requirements.txt")
     shutil.copy2(SPACE / "README.md", STAGING / "README.md")
-    copy_src(STAGING)
     copy_ckpt(STAGING)
 
     create_repo(

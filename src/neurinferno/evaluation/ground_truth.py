@@ -9,23 +9,23 @@ from __future__ import annotations
 
 import json
 import random
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
 class LabeledMessage:
-    bytes_hex:           str
-    boundary_per_gap:    list[int]    # binary, len = n_bytes - 1
+    bytes_hex: str
+    boundary_per_gap: list[int]  # binary, len = n_bytes - 1
     field_type_per_byte: list[int]
-    format_id:           str
+    format_id: str
 
 
 def load_labeled_messages(
     tier2_dir: Path,
-    protocol:  str,
-    max_msgs:  int | None = 1000,
-    seed:      int = 0,
+    protocol: str,
+    max_msgs: int | None = 1000,
+    seed: int = 0,
     exclude_corrupted: bool = True,
     split: str = "test",
     test_fraction: float = 0.20,
@@ -53,19 +53,21 @@ def load_labeled_messages(
 
     if split == "test":
         n_val = max(1, int(len(raw_lines) * (1.0 - test_fraction)))
-        raw_lines = raw_lines[n_val:]          # last 20% by raw index
+        raw_lines = raw_lines[n_val:]  # last 20% by raw index
     # split=="all" uses all raw_lines
 
     all_records: list[LabeledMessage] = []
     for d in raw_lines:
         if exclude_corrupted and d.get("format_id", "").endswith("_corrupted"):
             continue
-        all_records.append(LabeledMessage(
-            bytes_hex=d["bytes_hex"],
-            boundary_per_gap=d["boundary_per_gap"],
-            field_type_per_byte=d["field_type_per_byte"],
-            format_id=d["format_id"],
-        ))
+        all_records.append(
+            LabeledMessage(
+                bytes_hex=d["bytes_hex"],
+                boundary_per_gap=d["boundary_per_gap"],
+                field_type_per_byte=d["field_type_per_byte"],
+                format_id=d["format_id"],
+            )
+        )
 
     records = all_records
 

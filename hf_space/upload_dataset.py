@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
 
 from huggingface_hub import HfApi, create_repo
 
+try:
+    from hf_space.deploy import ROOT, load_token
+except ModuleNotFoundError:  # Support direct execution from hf_space/.
+    from deploy import ROOT, load_token
+
 SPACE = Path(__file__).resolve().parent
-sys.path.insert(0, str(SPACE))
-from deploy import ROOT, load_token
 STAGING = SPACE / ".dataset_staging"
 
 

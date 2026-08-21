@@ -1,4 +1,4 @@
-"""Public inference API: load a checkpoint (local or Hugging Face) and cut fields."""
+"""Public inference API: load a checkpoint and infer field boundaries."""
 
 from __future__ import annotations
 
@@ -26,18 +26,41 @@ class Segment:
 
 @dataclass
 class MessageResult:
+    """Inference result for one processed message.
+
+    ``n_bytes`` and ``hex`` describe the bytes processed by the model. When an
+    input exceeds the configured maximum length, ``original_n_bytes`` records
+    its original size and ``truncated`` is true.
+    """
+
     hex: str
     n_bytes: int
     cuts: list[bool]
     scores: list[float]
     segments: list[Segment] = field(default_factory=list)
+    original_n_bytes: int | None = None
+    truncated: bool = False
 
 
 def parse_hex(text: str) -> bytes:
-    s = re.sub(r"(?i)0x", "", text.strip())
-    s = re.sub(r"[^0-9a-fA-F]", "", s)
-    if len(s) < 2 or len(s) % 2:
-        raise ValueError(f"invalid hex (len={len(s)}): {text[:40]!r}")
+    """Parse a hex string with optional whitespace, ``0x``, ``:``, ``-``, or ``_``.
+
+    Unsupported characters are rejected instead of being silently discarded.
+    """
+
+    s = text.strip()
+    s = re.sub(r"(?i)(?<![0-9a-f])0x", "", s)
+    invalid = re.search(r"[^0-9a-fA-F\s:_-]", s)
+    if invalid:
+        raise ValueError(
+            f"invalid hex: unsupported character {invalid.group()!r} "
+            f"at position {invalid.start() + 1}"
+        )
+    s = re.sub(r"[\s:_-]", "", s)
+    if not s:
+        raise ValueError("invalid hex: no bytes found")
+    if len(s) % 2:
+        raise ValueError(f"invalid hex: expected an even number of digits, got {len(s)}")
     return bytes.fromhex(s)
 
 
@@ -46,7 +69,8 @@ def _hp(hp: dict, key: str, default):
 
 
 def load_full_model(path: str | Path, device: str = "cpu") -> FullModel:
-    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    # Checkpoints are treated as data, not executable pickle payloads.
+    ckpt = torch.load(path, map_location="cpu", weights_only=True)
     hp = ckpt.get("hyper_parameters") or {}
     model = FullModel(
         d_model=_hp(hp, "d_model", 128),
@@ -86,7 +110,7 @@ class FieldBoundaryModel:
         self.max_len = max_len
 
     @classmethod
-    def from_checkpoint(cls, path: str | Path, device: str = "cpu") -> "FieldBoundaryModel":
+    def from_checkpoint(cls, path: str | Path, device: str = "cpu") -> FieldBoundaryModel:
         model = load_full_model(path, device=device)
         return cls(model, device=device)
 
@@ -97,7 +121,7 @@ class FieldBoundaryModel:
         filename: str = DEFAULT_WEIGHT,
         device: str = "cpu",
         revision: str | None = None,
-    ) -> "FieldBoundaryModel":
+    ) -> FieldBoundaryModel:
         from huggingface_hub import hf_hub_download
 
         path = hf_hub_download(repo_id=repo_id, filename=filename, revision=revision)
@@ -111,16 +135,30 @@ class FieldBoundaryModel:
     ) -> list[MessageResult]:
         if not messages:
             raise ValueError("need at least one message")
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError("threshold must be between 0 and 1")
+        if max_msgs < 1:
+            raise ValueError("max_msgs must be at least 1")
+        if len(messages) > max_msgs:
+            raise ValueError(f"received {len(messages)} messages; maximum is {max_msgs}")
+
         raw: list[bytes] = []
-        for m in messages[:max_msgs]:
-            raw.append(m if isinstance(m, (bytes, bytearray)) else parse_hex(str(m)))
+        for index, message in enumerate(messages, start=1):
+            parsed = (
+                bytes(message)
+                if isinstance(message, (bytes, bytearray))
+                else parse_hex(str(message))
+            )
+            if not parsed:
+                raise ValueError(f"message {index} is empty")
+            raw.append(parsed)
 
         n = len(raw)
         lens = [min(len(m), self.max_len) for m in raw]
         L = max(lens)
         x = torch.full((1, n, L), PAD_IDX, dtype=torch.long)
         for i, m in enumerate(raw):
-            x[0, i, :lens[i]] = torch.tensor(list(m[:lens[i]]), dtype=torch.long)
+            x[0, i, : lens[i]] = torch.tensor(list(m[: lens[i]]), dtype=torch.long)
         x = x.to(self.device)
 
         with torch.no_grad():
@@ -136,16 +174,18 @@ class FieldBoundaryModel:
             bounds = [0] + [j + 1 for j, cut in enumerate(cuts) if cut] + [n_bytes]
             segs = [
                 Segment(a, b, m[a:b].hex())
-                for a, b in zip(bounds, bounds[1:])
+                for a, b in zip(bounds, bounds[1:], strict=True)
                 if b > a
             ]
             results.append(
                 MessageResult(
-                    hex=m.hex(),
+                    hex=m[:n_bytes].hex(),
                     n_bytes=n_bytes,
                     cuts=cuts,
                     scores=scores,
                     segments=segs,
+                    original_n_bytes=len(m),
+                    truncated=len(m) > n_bytes,
                 )
             )
         return results

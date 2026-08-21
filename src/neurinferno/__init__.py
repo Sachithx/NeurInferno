@@ -1,5 +1,8 @@
 """NeurInferno: field-boundary inference for unlabeled binary protocols."""
 
+from importlib.metadata import PackageNotFoundError, version
+
+from neurinferno.data_generation.label_format import FIELD_TYPE_IDS, FIELD_TYPES
 from neurinferno.inference import (
     DEFAULT_REPO,
     FieldBoundaryModel,
@@ -9,7 +12,6 @@ from neurinferno.inference import (
     parse_hex,
 )
 from neurinferno.model.full_model import FullModel
-from neurinferno.data_generation.label_format import FIELD_TYPES, FIELD_TYPE_IDS
 
 __all__ = [
     "DEFAULT_REPO",
@@ -23,4 +25,7 @@ __all__ = [
     "parse_hex",
 ]
 
-__version__ = "0.1.0"
+try:
+    __version__ = version("neurinferno")
+except PackageNotFoundError:
+    __version__ = "0.2.0"
