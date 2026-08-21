@@ -472,7 +472,7 @@ The model processes at most **{MAX_LEN} bytes per message** and predicts boundar
         clear_outputs,
         inputs=[],
         outputs=[message_input, threshold_input, *inference_outputs],
-        api_visibility="private",
+        api_name=False,
     )
 
 demo.queue(max_size=20)
