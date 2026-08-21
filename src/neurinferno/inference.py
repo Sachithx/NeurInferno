@@ -174,7 +174,7 @@ class FieldBoundaryModel:
             bounds = [0] + [j + 1 for j, cut in enumerate(cuts) if cut] + [n_bytes]
             segs = [
                 Segment(a, b, m[a:b].hex())
-                for a, b in zip(bounds, bounds[1:], strict=True)
+                for a, b in zip(bounds, bounds[1:], strict=False)
                 if b > a
             ]
             results.append(
