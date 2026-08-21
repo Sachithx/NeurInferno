@@ -35,7 +35,7 @@ train = [
   "gdown>=5.0",
 ]
 demo = [
-  "gradio>=5.29,<6",
+  "gradio>=5.29,<7",
 ]
 dev = [
   "build>=1.2",
