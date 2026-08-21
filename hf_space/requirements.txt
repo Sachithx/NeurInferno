@@ -1,4 +1,4 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 neurinferno==0.2.0
-gradio==5.50.0
+gradio==6.24.0
 audioop-lts; python_version>='3.13'
